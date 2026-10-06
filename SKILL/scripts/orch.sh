@@ -230,6 +230,180 @@ sub_pool() {
   done
 }
 
+# ---- task add / task set -------------------------------------------------------
+sub_task() {
+  _tk_sub=${1:-}; [ $# -gt 0 ] && shift
+  case "$_tk_sub" in
+    add) sub_task_add "$@" ;;
+    set) sub_task_set "$@" ;;
+    *) usage_die "task: expected 'add' or 'set'" ;;
+  esac
+}
+sub_task_add() {
+  _ta_run=""; _ta_id=""; _ta_w=""; _ta_crit=""; _ta_scope=""; _ta_deps=""
+  while [ $# -gt 0 ]; do
+    [ $# -ge 2 ] || usage_die "task add: $1 needs a value"
+    case "$1" in
+      --run) _ta_run=$2 ;; --id) _ta_id=$2 ;; --worker) _ta_w=$2 ;;
+      --criterion) _ta_crit=$2 ;; --scope) _ta_scope=$2 ;; --deps) _ta_deps=$2 ;;
+      *) usage_die "task add: unknown argument: $1" ;;
+    esac
+    shift 2
+  done
+  [ -n "$_ta_id" ] && [ -n "$_ta_w" ] && [ -n "$_ta_crit" ] && [ -n "$_ta_scope" ] ||
+    usage_die "task add: --id, --worker, --criterion and --scope are required"
+  case "$_ta_id" in [!A-Za-z0-9]*|*[!A-Za-z0-9._-]*) usage_die "invalid task id: $_ta_id" ;; esac
+  require_run "$_ta_run"
+  _ta_name=$(resolve_worker "$_ta_w") || usage_die "unknown worker: $_ta_w (see orch.sh pool)"
+  [ -z "$(ledger_get "$_ta_id" task_id)" ] || usage_die "task $_ta_id already exists"
+  _ta_ord=$(workers_field "$_ta_name" ord)
+  _ta_wt=$(workers_field "$_ta_name" worktree)
+  if [ "$_ta_wt" = - ]; then _ta_wtv=null; else _ta_wtv=$(yaml_q "$_ta_wt"); fi
+  _ta_dir=$RUN_DIR/$_ta_id
+  mkdir -p "$_ta_dir"
+  _ta_now=$(now_utc)
+  lock_acquire
+  cp "$LEDGER" "$LEDGER.bak"
+  ledger_append_task \
+    "task_id=$(yaml_q "$_ta_id")" \
+    "agent_name=$(yaml_q "$_ta_name")" \
+    "title=$(yaml_q "[$(printf '%02d' "$_ta_ord")] $(workers_field "$_ta_name" title)")" \
+    "kind=$(yaml_q "$(workers_field "$_ta_name" kind)")" \
+    "pane_id=$(yaml_q "$(workers_field "$_ta_name" pane_id)")" \
+    "worktree=$_ta_wtv" \
+    "directory=$(yaml_q "$(workers_field "$_ta_name" directory)")" \
+    "dependencias=$(yaml_list "$_ta_deps")" \
+    "scope_escritura=$(yaml_list "$_ta_scope,$_ta_dir")" \
+    "criterion=$(yaml_q "$_ta_crit")" \
+    "output_path=$(yaml_q "$_ta_dir/report.md")" \
+    "evidence_refs=$(yaml_list "$_ta_dir/evidence.yml")" \
+    'estado="pending"' 'runtime_status=null' 'execution_outcome="unknown"' \
+    "created_at=$(yaml_q "$_ta_now")" "last_state_at=$(yaml_q "$_ta_now")" 'notas=""'
+  if _ta_out=$(cd "$WS" && sh "$SKILL_SCRIPTS/validate_dag.sh" "$LEDGER"); then
+    rm -f "$LEDGER.bak"; lock_release
+    printf 'task %s added -> %s\n' "$_ta_id" "$_ta_name"
+  else
+    mv "$LEDGER.bak" "$LEDGER"; lock_release
+    printf '%s\n' "$_ta_out" | grep '^\[FAIL\]'
+    die "task $_ta_id rejected by validate_dag.sh (ledger unchanged)"
+  fi
+}
+sub_task_set() {
+  _ts_run=""; _ts_t=""; _ts_e=""; _ts_n=""
+  while [ $# -gt 0 ]; do
+    [ $# -ge 2 ] || usage_die "task set: $1 needs a value"
+    case "$1" in
+      --run) _ts_run=$2 ;; --task) _ts_t=$2 ;; --estado) _ts_e=$2 ;; --notas) _ts_n=$2 ;;
+      *) usage_die "task set: unknown argument: $1" ;;
+    esac
+    shift 2
+  done
+  case "$_ts_e" in cancelled|failed|partial|blocked|interrupted) ;;
+    *) usage_die "task set: --estado must be cancelled, failed, partial, blocked or interrupted" ;; esac
+  [ -n "$_ts_n" ] || usage_die "task set: --notas with the reason is required"
+  require_run "$_ts_run"
+  [ -n "$(ledger_get "$_ts_t" task_id)" ] || usage_die "unknown task: $_ts_t"
+  with_lock set_state "$_ts_t" "$_ts_e" "" "$_ts_n"
+  printf 'task %s -> %s\n' "$_ts_t" "$_ts_e"
+}
+
+# ---- dispatch ------------------------------------------------------------------
+task_marker() { printf '[herdr-orch %s/%s]' "$RUN_ID" "$1"; }
+join_lines() { awk 'NR > 1 { printf ", " } { printf "%s", $0 } END { print "" }'; }
+# render_header TASK -> task-header.md with every {{KEY}} replaced by $H_KEY
+render_header() (
+  H_TASK_ID=$1; H_RUN_ID=$RUN_ID
+  H_AGENT_NAME=$(ledger_get "$1" agent_name); H_TITLE=$(ledger_get "$1" title)
+  H_DIRECTORY=$(ledger_get "$1" directory)
+  H_SCOPES=$(ledger_list "$1" scope_escritura | join_lines)
+  H_CRITERION=$(ledger_get "$1" criterion); H_CRITERION_YAML=$(yaml_q "$H_CRITERION")
+  H_OUTPUT_PATH=$(ledger_get "$1" output_path)
+  H_EVIDENCE_PATH=$(ledger_list "$1" evidence_refs | head -n 1)
+  export H_TASK_ID H_RUN_ID H_AGENT_NAME H_TITLE H_DIRECTORY H_SCOPES H_CRITERION \
+    H_CRITERION_YAML H_OUTPUT_PATH H_EVIDENCE_PATH
+  awk '{
+    out = ""; line = $0
+    while ((s = index(line, "{{")) > 0 && (e = index(substr(line, s + 2), "}}")) > 0) {
+      out = out substr(line, 1, s - 1) ENVIRON["H_" substr(line, s + 2, e - 1)]
+      line = substr(line, s + e + 3)
+    }
+    print out line
+  }' "$SKILL_SCRIPTS/prompt-templates/task-header.md"
+)
+active_task_of() { # AGENT [EXCEPT_TASK] -> first other active task of AGENT
+  ledger_rows | awk -F'\t' -v n="$1" -v x="${2:-}" \
+    '$2 == n && $1 != x && $3 ~ /^(launching|running|awaiting-approval|outcome-unknown)$/ { print $1; exit }'
+}
+sub_dispatch() {
+  _dp_run=""; _dp_t=""; _dp_pf=""; _dp_wait=0; _dp_to=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --wait) _dp_wait=1; shift; continue ;;
+    esac
+    [ $# -ge 2 ] || usage_die "dispatch: $1 needs a value"
+    case "$1" in
+      --run) _dp_run=$2 ;; --task) _dp_t=$2 ;; --prompt-file) _dp_pf=$2 ;; --timeout) _dp_to=$2 ;;
+      *) usage_die "dispatch: unknown argument: $1" ;;
+    esac
+    shift 2
+  done
+  [ -n "$_dp_t" ] && [ -f "$_dp_pf" ] || usage_die "dispatch: --task and an existing --prompt-file are required"
+  require_run "$_dp_run"
+  _dp_state=$(ledger_get "$_dp_t" estado)
+  [ "$_dp_state" = pending ] || usage_die "dispatch: task $_dp_t is ${_dp_state:-unknown}, not pending"
+  while IFS= read -r _dp_d; do
+    [ -n "$_dp_d" ] || continue
+    [ "$(ledger_get "$_dp_d" estado)" = verified ] || usage_die "dispatch: dependency $_dp_d of $_dp_t is not verified"
+  done <<EOF
+$(ledger_list "$_dp_t" dependencias)
+EOF
+  _dp_name=$(ledger_get "$_dp_t" agent_name)
+  _dp_other=$(active_task_of "$_dp_name" "$_dp_t")
+  [ -z "$_dp_other" ] || die "dispatch: worker $_dp_name already runs task $_dp_other"
+  _dp_st=$(agent_status "$_dp_name")
+  case "$_dp_st" in idle|done) ;; *) die "dispatch: worker $_dp_name is $_dp_st (needs idle or done)" ;; esac
+  { render_header "$_dp_t"; cat "$_dp_pf"; } > "$RUN_DIR/$_dp_t/prompt.md"
+  with_lock set_state "$_dp_t" launching
+  _dp_line="$(task_marker "$_dp_t") Read and execute $RUN_DIR/$_dp_t/prompt.md"
+  if hcall agent prompt "$_dp_name" "$_dp_line" --wait --timeout 15000; then
+    _dp_st=$(printf '%s' "$H_OUT" | jq -r '.result.agent.agent_status // empty')
+    [ -n "$_dp_st" ] || _dp_st=$(agent_status "$_dp_name")
+  else
+    case "$H_ERR" in
+      timeout) _dp_st=working ;;
+      agent_blocked)
+        with_lock set_state "$_dp_t" outcome-unknown "" "prompt not sent: agent at approval dialog"
+        notify "$_dp_t: $_dp_name is waiting for approval" request
+        printf 'dispatch: %s not sent; %s waits for approval in pane %s; after it is resolved run: orch.sh reconcile --task %s\n' \
+          "$_dp_t" "$_dp_name" "$(ledger_get "$_dp_t" pane_id)" "$_dp_t"
+        exit 5 ;;
+      *)
+        with_lock set_state "$_dp_t" outcome-unknown "" "dispatch: $H_ERR"
+        printf 'dispatch: %s outcome-unknown (%s); do not resend; run: orch.sh reconcile --task %s\n' "$_dp_t" "$H_ERR" "$_dp_t"
+        exit 3 ;;
+    esac
+  fi
+  case "$_dp_st" in
+    idle|done)
+      with_lock set_state "$_dp_t" completed "$_dp_st"
+      printf 'dispatch: %s completed (%s); next: orch.sh verify --task %s\n' "$_dp_t" "$_dp_st" "$_dp_t"; exit 0 ;;
+    blocked)
+      with_lock set_state "$_dp_t" awaiting-approval blocked
+      notify "$_dp_t: $_dp_name needs approval" request
+      printf 'dispatch: %s awaiting approval in pane %s; ask the user\n' "$_dp_t" "$(ledger_get "$_dp_t" pane_id)"; exit 5 ;;
+    working)
+      with_lock set_state "$_dp_t" running working
+      printf 'dispatch: %s running on %s\n' "$_dp_t" "$_dp_name" ;;
+    *)
+      with_lock set_state "$_dp_t" outcome-unknown "" "dispatch: agent status $_dp_st"
+      printf 'dispatch: %s outcome-unknown (status %s); run: orch.sh reconcile --task %s\n' "$_dp_t" "$_dp_st" "$_dp_t"; exit 3 ;;
+  esac
+  if [ "$_dp_wait" = 1 ]; then
+    if [ -n "$_dp_to" ]; then sub_wait --run "$RUN_ID" --task "$_dp_t" --timeout "$_dp_to"
+    else sub_wait --run "$RUN_ID" --task "$_dp_t"; fi
+  fi
+}
+
 # ---- dispatcher --------------------------------------------------------------
 cmd=${1:-help}
 [ $# -gt 0 ] && shift
@@ -241,5 +415,7 @@ case "$cmd" in
   preflight) sub_preflight "$@" ;;
   init-run) sub_init_run "$@" ;;
   pool) sub_pool "$@" ;;
+  task) sub_task "$@" ;;
+  dispatch) sub_dispatch "$@" ;;
   *) usage_text >&2; usage_die "unknown subcommand: $cmd" ;;
 esac

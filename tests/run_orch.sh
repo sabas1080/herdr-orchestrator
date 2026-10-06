@@ -219,6 +219,83 @@ new_case fix-ord-title
 orch init-run --run-id o1 --worker claude:Alpha >/dev/null 2>&1
 check fix-ord-title 2 "rerun with the same --worker flags" orch init-run --run-id o1 --worker claude:Beta
 
+# ---- Task 5: task add / task set / dispatch --------------------------------
+# setup_run CASE: initialised run "t" with two idle claude workers and the
+# agent_list/agent_get fakes pointing at them; exports N1 N2.
+setup_run() {
+  new_case "$1"
+  orch init-run --run-id t --worker claude --worker claude >/dev/null 2>&1
+  N1=$(awk -F'\t' 'NR==2{print $2}' "$WS/.herdr-orch/t/workers.tsv")
+  N2=$(awk -F'\t' 'NR==3{print $2}' "$WS/.herdr-orch/t/workers.tsv")
+  resp agent_list "{\"result\":{\"agents\":[{\"name\":\"$N1\",\"agent_status\":\"idle\",\"pane_id\":\"w1:p2\"},{\"name\":\"$N2\",\"agent_status\":\"idle\",\"pane_id\":\"w1:p3\"}],\"type\":\"agent_list\"}}"
+  resp agent_get "$(agent_json "$N1" idle)"
+  printf 'Write docs/a/README.md describing module a.\n' > "$WS/task.md"
+}
+st() { (cd "$WS" && SKILL_SCRIPTS=$SCRIPTS && . "$SCRIPTS/lib/orch_common.sh" && . "$SCRIPTS/lib/orch_ledger.sh" &&
+        resolve_run t && ledger_get "$1" "${2:-estado}"); }
+
+setup_run taskadd
+check task-add 0 "task W1 added" orch task add --id W1 --worker 1 --criterion 'docs/a/README.md exists' --scope docs/a
+check task-add-pending 0 "pending" st W1
+check task-add-valid 0 "TOTAL: " sh -c "cd '$WS' && sh '$SCRIPTS/validate_dag.sh' .herdr-orch/t/ledger.yaml"
+cp "$WS/.herdr-orch/t/ledger.yaml" "$C/before.yaml"
+check task-add-overlap 1 "rejected" orch task add --id W2 --worker 2 --criterion c --scope docs/a/x
+check task-add-rollback 0 "" cmp -s "$C/before.yaml" "$WS/.herdr-orch/t/ledger.yaml"
+check task-add-unknown-worker 2 "unknown worker" orch task add --id W3 --worker 9 --criterion c --scope docs/c
+check task-add-duplicate 2 "already exists" orch task add --id W1 --worker 1 --criterion c --scope docs/z
+check task-set-no-notas 2 "notas" orch task set --task W1 --estado cancelled
+check task-set-bad-state 2 "estado" orch task set --task W1 --estado verified --notas x
+check task-set-cancel 0 "W1 -> cancelled" orch task set --task W1 --estado cancelled --notas 'replanned'
+check task-set-terminal 1 "illegal transition" orch task set --task W1 --estado failed --notas 'again'
+
+setup_run dispatch-done
+orch task add --id W1 --worker 1 --criterion 'the "README" lists a:b' --scope docs/a >/dev/null
+resp agent_prompt "$(agent_json "$N1" done)"
+check dispatch-done 0 "completed" orch dispatch --task W1 --prompt-file "$WS/task.md"
+check dispatch-done-state 0 "completed" st W1
+check dispatch-done-outcome 0 "succeeded" st W1 execution_outcome
+check dispatch-prompt-file 0 'criterion: "the \"README\" lists a:b"' cat "$WS/.herdr-orch/t/W1/prompt.md"
+check dispatch-prompt-body 0 "describing module a" cat "$WS/.herdr-orch/t/W1/prompt.md"
+check dispatch-marker 0 "" grep -q -- "agent prompt $N1 \[herdr-orch t/W1\] Read and execute $WS/.herdr-orch/t/W1/prompt.md --wait --timeout 15000" "$FAKE_HERDR_DIR/calls.log"
+check dispatch-not-pending 2 "not pending" orch dispatch --task W1 --prompt-file "$WS/task.md"
+
+setup_run dispatch-busy
+orch task add --id W1 --worker 1 --criterion c --scope docs/a >/dev/null
+resp agent_get "$(agent_json "$N1" working)"
+check dispatch-worker-busy 1 "is working" orch dispatch --task W1 --prompt-file "$WS/task.md"
+check dispatch-busy-still-pending 0 "pending" st W1
+
+setup_run dispatch-timeout
+orch task add --id W1 --worker 1 --criterion c --scope docs/a >/dev/null
+resp agent_prompt '' 1 "$(herr timeout)"
+check dispatch-timeout-running 0 "running" orch dispatch --task W1 --prompt-file "$WS/task.md"
+check dispatch-timeout-state 0 "running" st W1
+
+setup_run dispatch-stalled
+orch task add --id W1 --worker 1 --criterion c --scope docs/a >/dev/null
+resp agent_prompt '' 1 "$(herr agent_prompt_stalled)"
+check dispatch-stalled 3 "outcome-unknown" orch dispatch --task W1 --prompt-file "$WS/task.md"
+check dispatch-stalled-state 0 "outcome-unknown" st W1
+
+setup_run dispatch-blocked-before-send
+orch task add --id W1 --worker 1 --criterion c --scope docs/a >/dev/null
+resp agent_prompt '' 1 "$(herr agent_blocked)"
+check dispatch-agent-blocked 5 "approval" orch dispatch --task W1 --prompt-file "$WS/task.md"
+check dispatch-agent-blocked-state 0 "outcome-unknown" st W1
+check dispatch-agent-blocked-note 0 "prompt not sent" st W1 notas
+
+setup_run dispatch-settled-blocked
+orch task add --id W1 --worker 1 --criterion c --scope docs/a >/dev/null
+resp agent_prompt "$(agent_json "$N1" blocked)"
+check dispatch-settled-blocked 5 "approval" orch dispatch --task W1 --prompt-file "$WS/task.md"
+check dispatch-settled-blocked-state 0 "awaiting-approval" st W1
+check dispatch-notified 0 "" grep -q '^notification show' "$FAKE_HERDR_DIR/calls.log"
+
+setup_run dispatch-dep
+orch task add --id W1 --worker 1 --criterion c --scope docs/a >/dev/null
+orch task add --id W2 --worker 2 --criterion c --scope docs/b --deps W1 >/dev/null
+check dispatch-dep-unverified 2 "dependency W1" orch dispatch --task W2 --prompt-file "$WS/task.md"
+
 # ---- orch.sh subcommand cases are appended by Tasks 4-7 --------------------
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAILS"
