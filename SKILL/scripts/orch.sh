@@ -152,7 +152,10 @@ EOF
       _ir_old=$(workers_field "$_ir_name" pane_id)
       _ir_new=$(printf '%s\n' "$_ir_live" | awk -F'\t' -v n="$_ir_name" '$1 == n { print $2; exit }')
       if [ -n "$_ir_new" ] && [ -n "$_ir_old" ] && [ "$_ir_new" != "$_ir_old" ]; then
-        with_lock workers_set "$_ir_name" pane_id "$_ir_new"
+        if ! with_lock workers_set "$_ir_name" pane_id "$_ir_new"; then
+          printf 'FAILED   %s: could not update workers.tsv\n' "$_ir_label"
+          _ir_failed=$((_ir_failed + 1)); continue
+        fi
         printf 'reused   %s -> %s (moved %s -> %s)\n' "$_ir_label" "$_ir_name" "$_ir_old" "$_ir_new"
       else
         printf 'reused   %s -> %s (%s)\n' "$_ir_label" "$_ir_name" "$_ir_old"
@@ -162,7 +165,11 @@ EOF
     _ir_pane=$(workers_field "$_ir_name" pane_id)
     if [ -n "$_ir_pane" ] && ! hcall pane get "$_ir_pane"; then
       if [ "$H_ERR" = pane_not_found ]; then
-        with_lock workers_delete "$_ir_name"; _ir_pane=""
+        if ! with_lock workers_delete "$_ir_name"; then
+          printf 'FAILED   %s: could not update workers.tsv\n' "$_ir_label"
+          _ir_failed=$((_ir_failed + 1)); continue
+        fi
+        _ir_pane=""
       else
         printf 'FAILED   %s: pane get %s (%s)\n' "$_ir_label" "$_ir_pane" "$H_ERR"
         _ir_failed=$((_ir_failed + 1)); continue
@@ -694,7 +701,10 @@ sub_teardown() {
     fi
     if hcall pane close "$_td_pane"; then
       printf 'closed pane %s (%s%s)\n' "$_td_pane" "$_n" "$_td_moved"
-      [ -z "$_td_moved" ] || with_lock workers_set "$_n" pane_id "$_td_pane"
+      if [ -n "$_td_moved" ] && ! with_lock workers_set "$_n" pane_id "$_td_pane"; then
+        printf 'warning: could not update workers.tsv for %s\n' "$_n"
+        _td_fail=$((_td_fail + 1))
+      fi
     elif [ "$H_ERR" = pane_not_found ]; then printf 'pane %s (%s): already closed\n' "$_td_pane" "$_n"
     else printf 'pane %s (%s): could not close (%s)\n' "$_td_pane" "$_n" "$H_ERR"; _td_fail=$((_td_fail + 1)); fi
   done <<EOF

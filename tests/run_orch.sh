@@ -19,6 +19,15 @@ check() {
   fi
   printf 'ok   %s\n' "$name"; PASS=$((PASS + 1))
 }
+# skip NAME REASON: neither pass nor fail
+skip() { printf 'skip   %s (%s)\n' "$1" "$2"; }
+[ -c /dev/full ] && HAVE_FULL=1 || HAVE_FULL=0
+# orch_ff TMPPREFIX ARGS...: run orch.sh with TMPPREFIX.<pid> symlinked to /dev/full
+# (exec keeps the PID, so it is the temp path the writer will use)
+orch_ff() {
+  export WS FAKE_BIN ORCH
+  sh -c 'p=$1; shift; ln -s /dev/full "$p.$$" && PATH="$FAKE_BIN:$PATH" HERDR_ENV=1 HERDR_PANE_ID=w1:p1 exec sh -c '"'"'cd "$WS" && exec sh "$ORCH" "$@"'"'"' _ "$@"' _ "$@"
+}
 # resp KEY CONTENT [RC] [STDERR]: clears stale .rc/.err first so a later success
 # response is not poisoned by an earlier error response for the same key.
 resp() {
@@ -687,6 +696,7 @@ check ff5-dispatch-timeout-nowait 2 "--timeout requires --wait" orch dispatch --
 
 # task add: a failed append leaves no .ledger.tmp.* behind (temp path is a
 # symlink to /dev/full so the write fails after the temp is opened)
+if [ "$HAVE_FULL" = 1 ]; then
 setup_run fix-append-leak
 R=$WS/.herdr-orch/t
 cp "$R/ledger.yaml" "$TMP/ledger.before"
@@ -694,6 +704,60 @@ check append-leak-fails 1 "could not be appended" sh -c "ln -s /dev/full '$R/.le
 check append-leak-ledger 0 "" cmp "$TMP/ledger.before" "$R/ledger.yaml"
 check append-leak-no-temp 0 "" sh -c "[ -z \"\$(ls -A '$R' | grep '^\.ledger\.tmp\.')\" ]"
 check append-leak-retry 0 "task W1 added" orch task add --id W1 --worker 1 --criterion c --scope docs/a
+else skip append-leak '(no /dev/full)'; fi
+
+# Writers whose temp write fails: temp removed, non-zero, target unchanged.
+if [ "$HAVE_FULL" = 1 ]; then
+  new_case fix-writers
+  check lib-workers-set-fail 0 "rc=1 same tmp=0" lib_run '
+    workers_add 1 w01-a-0001 Alpha claude w1 w1:p2 "$WS" - && cp "$WORKERS" "$WORKERS.before" &&
+    ln -s /dev/full "$WORKERS.tmp.$$" &&
+    { workers_set w01-a-0001 pane_id w1:p9; rc=$?; } 2>/dev/null
+    cmp -s "$WORKERS" "$WORKERS.before" && s=same || s=changed
+    [ -e "$WORKERS.tmp.$$" ] || [ -L "$WORKERS.tmp.$$" ]; t=$?; [ $t -eq 0 ] && t=1 || t=0
+    printf "rc=%s %s tmp=%s" "$rc" "$s" "$t"'
+  check lib-workers-delete-fail 0 "rc=1 same tmp=0" lib_run '
+    workers_add 1 w01-a-0001 Alpha claude w1 w1:p2 "$WS" - && cp "$WORKERS" "$WORKERS.before" &&
+    ln -s /dev/full "$WORKERS.tmp.$$" &&
+    { workers_delete w01-a-0001; rc=$?; } 2>/dev/null
+    cmp -s "$WORKERS" "$WORKERS.before" && s=same || s=changed
+    [ -e "$WORKERS.tmp.$$" ] || [ -L "$WORKERS.tmp.$$" ]; t=$?; [ $t -eq 0 ] && t=1 || t=0
+    printf "rc=%s %s tmp=%s" "$rc" "$s" "$t"'
+  new_case fix-ledger-new
+  check lib-ledger-new-fail 0 "rc=1 nofile tmp=0" lib '
+    resolve_run r1 && mkdir -p "$RUN_DIR" && ln -s /dev/full "$RUN_DIR/.ledger.tmp.$$" &&
+    { ledger_new 0.8.2 w1 w1:t1 w1:p1 claude; rc=$?; } 2>/dev/null
+    [ -e "$LEDGER" ] && s=file || s=nofile
+    [ -L "$RUN_DIR/.ledger.tmp.$$" ]; t=$?; [ $t -eq 0 ] && t=1 || t=0
+    printf "rc=%s %s tmp=%s" "$rc" "$s" "$t"'
+
+  # init-run / teardown surface a failed workers.tsv update
+  setup_run ff-initrun-set
+  R=$WS/.herdr-orch/t
+  cp "$R/workers.tsv" "$TMP/w.before"
+  resp agent_list "{\"result\":{\"agents\":[{\"name\":\"$N1\",\"agent_status\":\"idle\",\"pane_id\":\"w1:p9\"},{\"name\":\"$N2\",\"agent_status\":\"idle\",\"pane_id\":\"w1:p3\"}],\"type\":\"agent_list\"}}"
+  check ff-initrun-set-failed 1 "FAILED   [01]" orch_ff "$R/workers.tsv.tmp" init-run --run-id t --worker claude --worker claude
+  check ff-initrun-set-msg 1 "could not update workers.tsv" orch_ff "$R/workers.tsv.tmp" init-run --run-id t --worker claude --worker claude
+  check ff-initrun-set-incomplete 1 "INCOMPLETE: 1 worker(s) failed" orch_ff "$R/workers.tsv.tmp" init-run --run-id t --worker claude --worker claude
+  check ff-initrun-set-unchanged 0 "" cmp "$TMP/w.before" "$R/workers.tsv"
+
+  setup_run ff-initrun-del
+  R=$WS/.herdr-orch/t
+  resp agent_list '{"result":{"agents":[],"type":"agent_list"}}'
+  resp pane_get '' 1 "$(herr pane_not_found)"
+  check ff-initrun-del-failed 1 "FAILED   [01]" orch_ff "$R/workers.tsv.tmp" init-run --run-id t --worker claude --worker claude
+  check ff-initrun-del-msg 1 "could not update workers.tsv" orch_ff "$R/workers.tsv.tmp" init-run --run-id t --worker claude --worker claude
+
+  setup_run ff-teardown
+  R=$WS/.herdr-orch/t
+  resp agent_list "{\"result\":{\"agents\":[{\"name\":\"$N1\",\"agent_status\":\"idle\",\"pane_id\":\"w1:p7\"},{\"name\":\"$N2\",\"agent_status\":\"idle\",\"pane_id\":\"w1:p3\"}],\"type\":\"agent_list\"}}"
+  check ff-teardown-warn 1 "warning: could not update workers.tsv for $N1" orch_ff "$R/workers.tsv.tmp" teardown --confirm
+  check ff-teardown-fail-count 1 "teardown: 1 failure(s)" orch_ff "$R/workers.tsv.tmp" teardown --confirm
+else
+  skip lib-workers-set-fail '(no /dev/full)'; skip lib-workers-delete-fail '(no /dev/full)'
+  skip lib-ledger-new-fail '(no /dev/full)'; skip ff-initrun-set '(no /dev/full)'
+  skip ff-initrun-del '(no /dev/full)'; skip ff-teardown '(no /dev/full)'
+fi
 
 # ---- orch.sh subcommand cases are appended by Tasks 4-7 --------------------
 
