@@ -5,98 +5,141 @@
 [![Platform](https://img.shields.io/badge/platform-herdr-8A2BE2.svg)](https://herdr.dev)
 [![Español](https://img.shields.io/badge/read%20in-Espa%C3%B1ol-blue.svg)](README.es.md)
 
-> A Claude Code skill that orchestrates several coding agents inside [herdr](https://herdr.dev): the orchestrator splits the work, workers run in sibling panes, and every result is verified against written evidence before the run closes.
+> Ask Claude, inside [herdr](https://herdr.dev), to split a big task across several coding agents. It opens the panes, hands out the work, waits, checks every result against written evidence and gives you a short summary.
 
-## What it does
+## What it is
 
-- **A Claude orchestrator that never implements.** It splits the task, dispatches complete task files and reads only short reports, never raw worker transcripts.
-- **Mixed-kind workers in sibling panes.** `claude`, `codex`, `opencode` and other agent kinds run side by side in the orchestrator's tab.
-- **Schema-4 ledger plus evidence gate.** `.herdr-orch/<run>/ledger.yaml` records worker identity, scopes and an explicit state machine; a task is `verified` only when its `evidence.yml` passes `check_evidence.sh`.
-- **POSIX validators.** `validate_dag.sh` and `validate_ledger_closed.sh` need only `sh` + `awk`.
-- **Fail-closed handling** of approvals, timeouts and stuck workers: the orchestrator never answers a dialog, never resends a prompt blindly and reconciles uncertain outcomes first.
+A Claude Code skill. You keep talking to Claude in your herdr pane as usual; when a task is big enough to share, Claude becomes the **orchestrator**:
+
+- it starts **worker agents** in sibling panes of your tab — `claude`, `codex`, `opencode` or any other kind herdr supports;
+- each worker gets a complete, self-contained task file and a folder it may write to;
+- Claude never does the work itself and never reads the workers' full transcripts — only their short reports — so its own context stays small;
+- a task counts as done only when the worker's evidence file proves the acceptance criterion.
+
+## How you use it
+
+Just ask, in your own words:
+
+> *Orchestrate two workers in herdr: one documents `src/a`, the other documents `src/b`.*
+
+> *Reparte este refactor entre un worker claude y uno codex en herdr y verifica cada resultado.*
+
+What you will see:
+
+1. Two new panes appear next to yours, labelled `[01] Vermithrax`, `[02] Pyreclaw`… (default names come from a dragon catalog).
+2. Each worker receives its task and starts working; you can watch or ignore them.
+3. If a worker stops to ask for an approval, Claude tells you which pane needs you and a herdr notification sounds. **You** answer it; Claude never does.
+4. When everything is checked, Claude replies with a short report: what each worker did, whether its evidence passed, and anything that needs your attention.
+5. The worker panes stay open until you ask Claude to close them.
+
+## How it works
+
+```
+your pane (Claude, orchestrator)
+        |   orch.sh  (SKILL/scripts)
+        v
+  herdr CLI  --->  [01] worker pane   [02] worker pane   ...
+        |
+        v
+.herdr-orch/<run>/            (inside your project, git-ignored)
+    ledger.yaml               every task, its worker and its state
+    workers.tsv               which agent lives in which pane
+    <task>/prompt.md          the task file the worker reads
+    <task>/report.md          the worker's short report (≤500 words)
+    <task>/evidence.yml       criterion · result · what was checked
+```
+
+One run goes through six steps:
+
+1. **Split** the request into tasks, each with a criterion and the files it may touch. Tasks that would write the same files are put in order instead of running in parallel.
+2. **Start workers** in sibling panes (`init-run`). If a pane fails to start, rerunning completes only what is missing.
+3. **Send** each worker its task (`dispatch`): one short line pointing at its task file.
+4. **Wait** for each worker (`wait`). Approvals go to you; a worker that disappears, hangs or whose result is uncertain is reported, never silently retried.
+5. **Verify** each report and its evidence (`verify`).
+6. **Close** the run (`close`): a validator checks the whole ledger and prints `TOTAL: N passed, 0 failed`.
+
+## Guarantees
+
+- **Never answers for you.** Approval prompts and Claude's folder-trust dialog are always left to you.
+- **Never resends blindly.** If it is unclear whether a worker got its task, Claude reconciles first (`reconcile`) and only resends when the task provably never arrived.
+- **Only touches what it created.** Closing panes or worktrees affects only this run's workers, never your pane or anything else, and only when you ask.
+- **No result without evidence.** "The agent went idle" is not success; only a passing evidence check is.
+- **Stays in herdr.** Outside a herdr pane it only proposes a plan; it doesn't pretend to run anything.
+
+## Differences from the original
+
+This repo is a fork of DragonJAR's [OpenCode-Orchestrator-Skill](https://github.com/DragonJAR/OpenCode-Orchestrator-Skill) 1.0.0, but it does a different job:
+
+| | OpenCode-Orchestrator-Skill | herdr-orchestrator |
+| --- | --- | --- |
+| Runtime | OpenCode V2 server (HTTP API) | herdr terminal multiplexer (CLI) |
+| Workers | OpenCode sessions, each with ≥2 native subagents | Agents of any kind in sibling panes; their internal subagents are their business |
+| Seeing the work | Patched OpenCode TUI tabs | Real herdr panes, labelled `[NN] Name` |
+| Ledger | YAML schema 3 (sessions, `parentID`, locations) | YAML schema 4 (agent, pane, worktree, delivery evidence) |
+| Isolation | Disjoint write scopes | Disjoint scopes, or one git worktree per worker on request |
+| Kept from the original | — | Orchestrator-never-implements, complete task prompts, written evidence gate, POSIX validators, fail-closed rules, dragon names |
+| Removed | — | HTTP/auth discovery, tabs patching, per-OS adapters, the two-subagent rule |
+
+The OpenCode version is preserved at tag `opencode-final`.
 
 ## Install
 
-The folder name must equal the skill `name` (`herdr-orchestrator`).
+The folder name must equal the skill name, `herdr-orchestrator`.
 
 ```bash
 git clone https://github.com/sabas1080/herdr-orchestrator.git ~/.claude/skills/herdr-orchestrator-src
 ln -s ~/.claude/skills/herdr-orchestrator-src/SKILL ~/.claude/skills/herdr-orchestrator   # or copy SKILL/ there
 ```
 
-## Requirements
-
 | Requirement | Version |
 | --- | --- |
-| herdr | >= 0.8.2 (run inside a herdr pane, `HERDR_ENV=1`) |
+| herdr | ≥ 0.8.2 — Claude must run inside a herdr pane (`HERDR_ENV=1`) |
 | jq | any recent |
 | POSIX `sh` + `awk` | for `orch.sh` and the validators |
-| git | for the optional `--worktree` mode |
+| git | only for the optional worktree mode |
 
-## Quick start
+## Letting workers run unattended
 
-```sh
-sh SKILL/scripts/orch.sh preflight                                   # gate=ready ?
-sh SKILL/scripts/orch.sh init-run --run-id 20261006-docs --worker claude --worker codex
-sh SKILL/scripts/orch.sh task add --id W1 --worker 1 --scope docs/a --criterion "docs/a/README.md documents every public function of a/"
-sh SKILL/scripts/orch.sh task add --id W2 --worker 2 --scope docs/b --criterion "docs/b/README.md documents every public function of b/"
-sh SKILL/scripts/orch.sh dispatch --task W1 --prompt-file /tmp/w1.md
-sh SKILL/scripts/orch.sh dispatch --task W2 --prompt-file /tmp/w2.md
-sh SKILL/scripts/orch.sh wait --task W1 && sh SKILL/scripts/orch.sh verify --task W1
-sh SKILL/scripts/orch.sh wait --task W2 && sh SKILL/scripts/orch.sh verify --task W2
-sh SKILL/scripts/orch.sh close                                       # TOTAL: N passed, 0 failed
-```
-
-Other subcommands: `pool`, `task set`, `reconcile` (resolves `launching` / `outcome-unknown` tasks), `suggest-count FILE` and `teardown` (dry run; `--confirm` closes only this run's worker panes).
-
-### Worker permission mode (`--agent-arg`)
-
-`init-run --agent-arg ARG` (repeatable, one value per flag) is passed after `--` to `herdr agent start`. For example, to start Claude workers in auto permission mode:
+By default, workers start in your normal permission mode, so a Claude worker stops whenever it wants to edit a file or run a command, and waits for you. If you want them to work on their own, tell Claude which mode to start them in; it passes native arguments with `--agent-arg`:
 
 ```sh
-sh SKILL/scripts/orch.sh init-run --run-id 20261006-docs --worker claude --worker claude \
-  --agent-arg --permission-mode --agent-arg auto
+orch.sh init-run --worker claude --worker claude --agent-arg --permission-mode --agent-arg auto
 ```
 
-Use it only for unattended workers the user actually wants. Without it, workers start in your default permission mode and stop at approval prompts, which the orchestrator reports and never answers.
+Only do this when you want unattended workers. Also note that a folder Claude has never seen (a new repo or a worktree) shows Claude's folder-trust dialog once; answer it in that pane and ask Claude to continue — it reruns `init-run` with the same options.
 
-### Folder trust
+## For developers
 
-A fresh folder or worktree makes Claude show its folder-trust dialog. `init-run` then prints `INCOMPLETE`; answer the dialog once yourself in that pane and rerun `init-run --run-id ID` with the same `--worker` and `--agent-arg` flags. The orchestrator never answers it.
-
-## Architecture
+All mechanics live in `SKILL/scripts/orch.sh` (POSIX sh, needs `herdr` + `jq`). Claude runs it from the project root; you normally don't.
 
 ```
-orchestrator pane (Claude)
-        |
-        v
-  orch.sh  --->  herdr CLI  --->  worker panes (claude | codex | opencode ...)
-        |
-        v
-.herdr-orch/<run>/
-    ledger.yaml          schema 4, written only by orch.sh
-    workers.tsv          worker registry (identity)
-    <task>/prompt.md     composed task file
-    <task>/report.md     short worker report
-    <task>/evidence.yml  criterion, result, observed
+orch.sh preflight
+orch.sh init-run [--run-id ID] --worker KIND[:Title]... [--worktree] [--agent-arg ARG]...
+orch.sh pool [--run ID]
+orch.sh task add --id ID --worker NAME|NN --criterion TEXT --scope A[,B] [--deps X[,Y]] [--run ID]
+orch.sh task set --task ID --estado cancelled|failed|partial|blocked|interrupted --notas TEXT [--run ID]
+orch.sh dispatch --task ID --prompt-file F [--wait] [--timeout MS] [--run ID]
+orch.sh wait --task ID [--timeout MS] [--stuck-secs N] [--run ID]
+orch.sh reconcile --task ID [--run ID]
+orch.sh verify --task ID [--run ID]
+orch.sh suggest-count FILE
+orch.sh close [--allow-degraded] [--run ID]
+orch.sh teardown [--confirm] [--remove-worktrees] [--run ID]
 ```
 
-## Live acceptance
+Exit codes: `0` ok · `1` failure · `2` usage/environment · `3` outcome unknown/timeout · `4` stuck (advisory) · `5` waiting for your approval.
+The skill's own instructions are in [SKILL/SKILL.md](SKILL/SKILL.md); details in [SKILL/references/](SKILL/references/).
 
-Run against a real herdr 0.8.2 with 2 `claude` workers (permission mode `auto`): both tasks completed and verified, `close` printed `TOTAL: 4 passed, 0 failed`, and `teardown --confirm` closed exactly the two worker panes. Two earlier attempts stopped where the rules require (trust dialog, approval prompt). Details: [docs/superpowers/acceptance/2026-10-06-e2e.md](docs/superpowers/acceptance/2026-10-06-e2e.md).
-
-## Tests
+### Tests
 
 ```sh
-sh tests/run_validators.sh   # validators
-sh tests/run_orch.sh         # orch.sh against a fake herdr
+sh tests/run_validators.sh   # ledger validators
+sh tests/run_orch.sh         # orch.sh against a fake herdr (caps its own memory)
 sh tests/check_skill.sh      # skill structure and links
 ```
 
-## Origin
+The tests never touch your herdr session. A live run against real herdr 0.8.2 with two `claude` workers is recorded in [docs/superpowers/acceptance/2026-10-06-e2e.md](docs/superpowers/acceptance/2026-10-06-e2e.md): both tasks verified, `TOTAL: 4 passed, 0 failed`.
 
-Fork of DragonJAR's [OpenCode-Orchestrator-Skill](https://github.com/DragonJAR/OpenCode-Orchestrator-Skill) 1.0.0, rebuilt for herdr by Electronic Cats. The OpenCode version is preserved at tag `opencode-final`.
+## Origin and license
 
-## License
-
-MIT, see [SKILL/LICENSE](SKILL/LICENSE).
+Originally by [DragonJAR](https://github.com/DragonJAR/OpenCode-Orchestrator-Skill); rebuilt for herdr by Electronic Cats. MIT, see [SKILL/LICENSE](SKILL/LICENSE).
