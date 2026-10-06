@@ -4,7 +4,7 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## herdr-orchestrator 0.1.0 — 2026-10-06
+## [0.1.0] - 2026-10-06
 
 Fork of OpenCode-Orchestrator-Skill 1.0.0 (preserved at tag `opencode-final`), rebuilt for herdr.
 

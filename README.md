@@ -2,10 +2,10 @@
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](SKILL/LICENSE)
 [![Version](https://img.shields.io/badge/version-0.1.0-green.svg)](SKILL/SKILL.md)
-[![Platform](https://img.shields.io/badge/platform-herdr-8A2BE2.svg)](https://github.com/ogulcancelik/herdr)
+[![Platform](https://img.shields.io/badge/platform-herdr-8A2BE2.svg)](https://herdr.dev)
 [![Español](https://img.shields.io/badge/read%20in-Espa%C3%B1ol-blue.svg)](README.es.md)
 
-> A Claude Code skill that orchestrates several coding agents inside [herdr](https://github.com/ogulcancelik/herdr): the orchestrator splits the work, workers run in sibling panes, and every result is verified against written evidence before the run closes.
+> A Claude Code skill that orchestrates several coding agents inside [herdr](https://herdr.dev): the orchestrator splits the work, workers run in sibling panes, and every result is verified against written evidence before the run closes.
 
 ## What it does
 

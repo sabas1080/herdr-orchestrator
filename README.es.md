@@ -2,10 +2,10 @@
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](SKILL/LICENSE)
 [![Version](https://img.shields.io/badge/version-0.1.0-green.svg)](SKILL/SKILL.md)
-[![Platform](https://img.shields.io/badge/platform-herdr-8A2BE2.svg)](https://github.com/ogulcancelik/herdr)
+[![Platform](https://img.shields.io/badge/platform-herdr-8A2BE2.svg)](https://herdr.dev)
 [![English](https://img.shields.io/badge/read%20in-English-blue.svg)](README.md)
 
-> Skill de Claude Code que orquesta varios agentes de código dentro de [herdr](https://github.com/ogulcancelik/herdr): el orquestador divide el trabajo, los workers corren en panes hermanos y cada resultado se verifica con evidencia escrita antes de cerrar la corrida.
+> Skill de Claude Code que orquesta varios agentes de código dentro de [herdr](https://herdr.dev): el orquestador divide el trabajo, los workers corren en panes hermanos y cada resultado se verifica con evidencia escrita antes de cerrar la corrida.
 
 ## Qué hace
 
