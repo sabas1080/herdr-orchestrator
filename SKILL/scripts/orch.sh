@@ -38,6 +38,8 @@ sub_preflight() {
   printf 'compatible=%s\n' "$_pf_compat"
   printf 'kinds=%s\n' "$(herdr agent 2>&1 | sed -n 's/^ *kinds: *//p')"
   hcall pane current --current || die "cannot read the current pane: $H_ERR" 2
+  if [ -r "$SKILL_SCRIPTS/prompt-templates/task-header.md" ]; then printf 'template=ok\n'
+  else printf 'template=missing\n'; die "prompt-templates/task-header.md is missing or unreadable" 2; fi
   printf '%s' "$H_OUT" | jq -r '.result.pane | "workspace_id=\(.workspace_id)\ntab_id=\(.tab_id)\npane_id=\(.pane_id)\norchestrator_kind=\(.agent // "none")"'
   printf 'workspace_dir=%s\n' "$(pwd -P)"
   if git rev-parse --git-dir >/dev/null 2>&1; then printf 'git=yes\n'; else printf 'git=no\n'; fi
@@ -284,6 +286,7 @@ sub_task_add() {
     printf 'task %s added -> %s\n' "$_ta_id" "$_ta_name"
   else
     mv "$LEDGER.bak" "$LEDGER"; lock_release
+    rmdir "$_ta_dir" 2>/dev/null
     printf '%s\n' "$_ta_out" | grep '^\[FAIL\]'
     die "task $_ta_id rejected by validate_dag.sh (ledger unchanged)"
   fi
@@ -298,6 +301,7 @@ sub_task_set() {
     esac
     shift 2
   done
+  [ -n "$_ts_t" ] || usage_die "task set: --task is required"
   case "$_ts_e" in cancelled|failed|partial|blocked|interrupted) ;;
     *) usage_die "task set: --estado must be cancelled, failed, partial, blocked or interrupted" ;; esac
   [ -n "$_ts_n" ] || usage_die "task set: --notas with the reason is required"
@@ -350,6 +354,7 @@ sub_dispatch() {
   [ -n "$_dp_t" ] && [ -f "$_dp_pf" ] || usage_die "dispatch: --task and an existing --prompt-file are required"
   require_run "$_dp_run"
   _dp_state=$(ledger_get "$_dp_t" estado)
+  [ "$_dp_state" != launching ] || usage_die "task $_dp_t is launching (a previous dispatch did not finish); run: orch.sh reconcile --task $_dp_t"
   [ "$_dp_state" = pending ] || usage_die "dispatch: task $_dp_t is ${_dp_state:-unknown}, not pending"
   while IFS= read -r _dp_d; do
     [ -n "$_dp_d" ] || continue
@@ -362,7 +367,14 @@ EOF
   [ -z "$_dp_other" ] || die "dispatch: worker $_dp_name already runs task $_dp_other"
   _dp_st=$(agent_status "$_dp_name")
   case "$_dp_st" in idle|done) ;; *) die "dispatch: worker $_dp_name is $_dp_st (needs idle or done)" ;; esac
-  { render_header "$_dp_t"; cat "$_dp_pf"; } > "$RUN_DIR/$_dp_t/prompt.md"
+  [ -r "$_dp_pf" ] || die "dispatch: cannot read --prompt-file $_dp_pf"
+  [ -r "$SKILL_SCRIPTS/prompt-templates/task-header.md" ] || die "dispatch: task-header.md template is missing or unreadable"
+  mkdir -p "$RUN_DIR/$_dp_t"
+  _dp_tmp=$RUN_DIR/$_dp_t/.prompt.tmp.$$
+  if ! { render_header "$_dp_t" && cat "$_dp_pf"; } > "$_dp_tmp"; then
+    rm -f "$_dp_tmp"; die "dispatch: could not compose the prompt for $_dp_t"
+  fi
+  mv "$_dp_tmp" "$RUN_DIR/$_dp_t/prompt.md" || die "dispatch: could not write prompt.md"
   with_lock set_state "$_dp_t" launching
   _dp_line="$(task_marker "$_dp_t") Read and execute $RUN_DIR/$_dp_t/prompt.md"
   if hcall agent prompt "$_dp_name" "$_dp_line" --wait --timeout 15000; then

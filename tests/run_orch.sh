@@ -80,6 +80,7 @@ check lib-slugify 0 "vermithrax-the-great" lib 'slugify "Vermithrax the Great!!"
 check lib-run-suffix 0 "" lib 's1=$(run_suffix abc); s2=$(run_suffix abc); [ "$s1" = "$s2" ] && printf "%s" "$s1" | grep -qx "[0-9a-f][0-9a-f][0-9a-f][0-9a-f]"'
 check lib-yaml-q 0 '"a \"b\" c\\d"' lib 'yaml_q "a \"b\" c\\d"'
 check lib-yaml-list 0 '["a", "b c"]' lib 'yaml_list "a,b c"'
+check lib-yaml-list-trim 0 '["W1", "W2"]' lib 'yaml_list "W1, W2 "'
 check lib-ledger-roundtrip 0 'the "README" lists a:b \x' lib_run "
   ledger_append_task $(task_row W1 w01-a-0001 docs/a) &&
   ledger_update W1 \"criterion=\$(yaml_q 'the \"README\" lists a:b \\x')\" &&
@@ -295,6 +296,51 @@ setup_run dispatch-dep
 orch task add --id W1 --worker 1 --criterion c --scope docs/a >/dev/null
 orch task add --id W2 --worker 2 --criterion c --scope docs/b --deps W1 >/dev/null
 check dispatch-dep-unverified 2 "dependency W1" orch dispatch --task W2 --prompt-file "$WS/task.md"
+
+
+# ---- Task 5 review fixes ----------------------------------------------------
+setup_run fix5-notas
+orch task add --id W1 --worker 1 --criterion c --scope docs/a >/dev/null
+check fix5-esc-notas 0 "W1 -> cancelled" orch task set --task W1 --estado cancelled --notas "$(printf 'bad \033[31mred')"
+check fix5-esc-valid 0 "TOTAL: " sh -c "cd '$WS' && sh '$SCRIPTS/validate_dag.sh' .herdr-orch/t/ledger.yaml"
+check fix5-set-no-task 2 "--task is required" orch task set --estado cancelled --notas x
+orch task add --id W2 --worker 2 --criterion c --scope docs/b >/dev/null
+check fix5-add-deps-trim 0 "added" orch task add --id W3 --worker 2 --criterion c --scope docs/c --deps 'W1, W2'
+check fix5-deps-trimmed 0 '"W1", "W2"' grep dependencias "$WS/.herdr-orch/t/ledger.yaml"
+
+setup_run fix5-rmdir
+orch task add --id W1 --worker 1 --criterion c --scope docs/a >/dev/null
+orch task add --id W2 --worker 2 --criterion c --scope docs/a/x >/dev/null 2>&1
+check fix5-add-rejected-no-dir 0 "" test ! -d "$WS/.herdr-orch/t/W2"
+
+setup_run fix5-launching
+orch task add --id W1 --worker 1 --criterion c --scope docs/a >/dev/null
+(cd "$WS" && SKILL_SCRIPTS=$SCRIPTS && . "$SCRIPTS/lib/orch_common.sh" && . "$SCRIPTS/lib/orch_ledger.sh" && resolve_run t && set_state W1 launching)
+check fix5-launching-msg 2 "task W1 is launching (a previous dispatch did not finish); run: orch.sh reconcile --task W1" orch dispatch --task W1 --prompt-file "$WS/task.md"
+
+setup_run fix5-unreadable
+orch task add --id W1 --worker 1 --criterion c --scope docs/a >/dev/null
+cp "$WS/task.md" "$WS/noread.md"; chmod 000 "$WS/noread.md"
+if [ "$(id -u)" -ne 0 ]; then
+check fix5-unreadable-prompt 1 "cannot read" orch dispatch --task W1 --prompt-file "$WS/noread.md"
+check fix5-unreadable-pending 0 "pending" st W1
+fi
+chmod 600 "$WS/noread.md"
+
+setup_run fix5-notemplate
+orch task add --id W1 --worker 1 --criterion c --scope docs/a >/dev/null
+rm -rf "$C/skill"; cp -R "$SCRIPTS" "$C/skill"; rm "$C/skill/prompt-templates/task-header.md"
+check fix5-notemplate-preflight 2 "template=missing" sh -c "cd '$WS' && PATH='$FAKE_BIN':\$PATH HERDR_ENV=1 HERDR_PANE_ID=w1:p1 sh '$C/skill/orch.sh' preflight"
+check fix5-notemplate-dispatch 1 "task-header.md" sh -c "cd '$WS' && PATH='$FAKE_BIN':\$PATH HERDR_ENV=1 HERDR_PANE_ID=w1:p1 sh '$C/skill/orch.sh' dispatch --task W1 --prompt-file '$WS/task.md'"
+check fix5-notemplate-pending 0 "pending" st W1
+check fix5-notemplate-nosend 0 "0" calls "agent prompt"
+
+setup_run fix5-selfprompt
+orch task add --id W1 --worker 1 --criterion c --scope docs/a >/dev/null
+printf 'UNIQUE-BODY-LINE\n' > "$WS/.herdr-orch/t/W1/prompt.md"
+resp agent_prompt "$(agent_json "$N1" done)"
+check fix5-selfprompt 0 "completed" orch dispatch --task W1 --prompt-file "$WS/.herdr-orch/t/W1/prompt.md"
+check fix5-selfprompt-once 0 "1" grep -c UNIQUE-BODY-LINE "$WS/.herdr-orch/t/W1/prompt.md"
 
 # ---- orch.sh subcommand cases are appended by Tasks 4-7 --------------------
 

@@ -14,12 +14,13 @@ need_env() {
 
 # yaml_q STR -> double-quoted YAML scalar; \ and " escaped; newlines/tabs -> spaces
 yaml_q() {
-  printf '"%s"' "$(printf '%s' "$1" | tr '\n\r\t' '   ' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+  printf '"%s"' "$(printf '%s' "$1" | LC_ALL=C tr '\000-\037\177' ' ' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
 }
 # yaml_list CSV -> flow list of quoted items; "" -> []
 yaml_list() {
   _yl_out=""; _yl_ifs=$IFS; IFS=,
   for _yl_it in $1; do
+    _yl_it=${_yl_it#"${_yl_it%%[![:space:]]*}"}; _yl_it=${_yl_it%"${_yl_it##*[![:space:]]}"}
     [ -n "$_yl_it" ] && _yl_out="$_yl_out${_yl_out:+, }$(yaml_q "$_yl_it")"
   done
   IFS=$_yl_ifs; printf '[%s]' "$_yl_out"
