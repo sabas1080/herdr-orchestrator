@@ -184,6 +184,41 @@ orch init-run --run-id t5 --worker claude >/dev/null 2>&1
 mkdir -p "$WS/sub"
 check pool-from-subdir 2 "no run selected" sh -c "cd '$WS/sub' && PATH='$FAKE_BIN:$PATH' HERDR_ENV=1 sh '$ORCH' pool"
 
+# ---- Task 4 review fixes ---------------------------------------------------
+new_case fix-list-error
+resp agent_list '' 1 "$(herr server_unavailable)"
+check fix-list-error 1 "server_unavailable" orch init-run --run-id f1 --worker claude
+check fix-list-error-nounbound 0 "" sh -c "! (cd '$WS' && PATH='$FAKE_BIN:$PATH' HERDR_ENV=1 sh '$ORCH' init-run --run-id f1 --worker claude 2>&1 | grep -q unbound)"
+
+new_case fix-pool-run
+check fix-pool-run-novalue 2 "--run needs a value" timeout 5 sh -c "cd '$WS' && PATH='$FAKE_BIN:$PATH' HERDR_ENV=1 sh '$ORCH' pool --run"
+
+new_case fix-pane-get
+orch init-run --run-id g1 --worker claude >/dev/null 2>&1
+resp pane_get '' 1 "$(herr pane_not_found)"
+check fix-pane-gone 0 "started" orch init-run --run-id g1 --worker claude
+check fix-pane-gone-resplit 0 "" sh -c "[ \$(grep -c '^pane split' '$FAKE_HERDR_DIR/calls.log') -eq 2 ]"
+resp pane_get '' 1 "$(herr server_busy)"
+check fix-pane-busy 1 "INCOMPLETE" orch init-run --run-id g1 --worker claude
+check fix-pane-busy-no-split 0 "" sh -c "[ \$(grep -c '^pane split' '$FAKE_HERDR_DIR/calls.log') -eq 2 ]"
+check fix-pane-busy-row-kept 0 "" sh -c "[ \$(wc -l < '$WS/.herdr-orch/g1/workers.tsv') -eq 2 ]"
+
+new_case fix-moved
+orch init-run --run-id m1 --worker claude >/dev/null 2>&1
+NM=$(awk -F'\t' 'NR==2{print $2}' "$WS/.herdr-orch/m1/workers.tsv")
+resp agent_list "{\"result\":{\"agents\":[{\"name\":\"$NM\",\"agent_status\":\"idle\",\"pane_id\":\"w1:p9\"}],\"type\":\"agent_list\"}}"
+check fix-moved 0 "moved w1:p2 -> w1:p9" orch init-run --run-id m1 --worker claude
+check fix-moved-row 0 "w1:p9" cat "$WS/.herdr-orch/m1/workers.tsv"
+
+new_case fix-null-pane
+resp pane_split.1 '{"result":{"pane":{}}}'
+check fix-null-pane 1 "INCOMPLETE" orch init-run --run-id n1 --worker claude
+check fix-null-pane-no-rename 0 "" sh -c "! grep -q 'pane rename null' '$FAKE_HERDR_DIR/calls.log' && ! grep -q '^pane rename' '$FAKE_HERDR_DIR/calls.log'"
+
+new_case fix-ord-title
+orch init-run --run-id o1 --worker claude:Alpha >/dev/null 2>&1
+check fix-ord-title 2 "rerun with the same --worker flags" orch init-run --run-id o1 --worker claude:Beta
+
 # ---- orch.sh subcommand cases are appended by Tasks 4-7 --------------------
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAILS"

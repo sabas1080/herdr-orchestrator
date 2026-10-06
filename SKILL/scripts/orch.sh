@@ -74,7 +74,8 @@ sub_init_run() {
   resolve_run "$_ir_run"
   _ir_sfx=$(run_suffix "$RUN_ID")
   _ir_kinds=$(herdr agent 2>&1 | sed -n 's/^ *kinds: *//p')
-  _ir_live=$(live_agent_names) || die "cannot list herdr agents: $H_ERR"
+  hcall agent list || die "cannot list herdr agents: $H_ERR $H_ERRMSG"
+  _ir_live=$(printf '%s' "$H_OUT" | jq -r '.result.agents[]? | select((.name // "") != "") | "\(.name)\t\(.pane_id // "")"')
 
   # Pass 1: names, kinds, collisions. Nothing is created if this fails.
   _ir_ord=0; _ir_plan=""
@@ -90,7 +91,11 @@ sub_init_run() {
     case "$_ir_title" in *"	"*) usage_die "worker titles cannot contain tabs" ;; esac
     _ir_slug=$(slugify "$_ir_title")
     _ir_name="w$(printf '%02d' "$_ir_ord")${_ir_slug:+-$_ir_slug}-$_ir_sfx"
-    if printf '%s\n' "$_ir_live" | grep -qx -- "$_ir_name" && [ -z "$(workers_field "$_ir_name" agent_name)" ]; then
+    _ir_have=$(workers_field_by_ord "$_ir_ord" agent_name)
+    if [ -n "$_ir_have" ] && [ "$_ir_have" != "$_ir_name" ]; then
+      usage_die "worker $(printf '%02d' "$_ir_ord") is already $_ir_have in run $RUN_ID; rerun with the same --worker flags"
+    fi
+    if printf '%s\n' "$_ir_live" | cut -f1 | grep -qx -- "$_ir_name" && [ -z "$(workers_field "$_ir_name" agent_name)" ]; then
       die "agent name $_ir_name is already live outside run $RUN_ID; choose another title or --run-id"
     fi
     _ir_plan="$_ir_plan$_ir_ord	$_ir_name	$_ir_title	$_ir_kind
@@ -120,24 +125,39 @@ EOF
   while IFS='	' read -r _ir_ord _ir_name _ir_title _ir_kind; do
     [ -n "$_ir_ord" ] || continue
     _ir_label="[$(printf '%02d' "$_ir_ord")] $_ir_title"
-    if printf '%s\n' "$_ir_live" | grep -qx -- "$_ir_name"; then
-      printf 'reused   %s -> %s (%s)\n' "$_ir_label" "$_ir_name" "$(workers_field "$_ir_name" pane_id)"
+    if printf '%s\n' "$_ir_live" | cut -f1 | grep -qx -- "$_ir_name"; then
+      _ir_old=$(workers_field "$_ir_name" pane_id)
+      _ir_new=$(printf '%s\n' "$_ir_live" | awk -F'\t' -v n="$_ir_name" '$1 == n { print $2; exit }')
+      if [ -n "$_ir_new" ] && [ -n "$_ir_old" ] && [ "$_ir_new" != "$_ir_old" ]; then
+        with_lock workers_set "$_ir_name" pane_id "$_ir_new"
+        printf 'reused   %s -> %s (moved %s -> %s)\n' "$_ir_label" "$_ir_name" "$_ir_old" "$_ir_new"
+      else
+        printf 'reused   %s -> %s (%s)\n' "$_ir_label" "$_ir_name" "$_ir_old"
+      fi
       continue
     fi
     _ir_pane=$(workers_field "$_ir_name" pane_id)
     if [ -n "$_ir_pane" ] && ! hcall pane get "$_ir_pane"; then
-      with_lock workers_delete "$_ir_name"; _ir_pane=""
+      if [ "$H_ERR" = pane_not_found ]; then
+        with_lock workers_delete "$_ir_name"; _ir_pane=""
+      else
+        printf 'FAILED   %s: pane get %s (%s)\n' "$_ir_label" "$_ir_pane" "$H_ERR"
+        _ir_failed=$((_ir_failed + 1)); continue
+      fi
     fi
     if [ -z "$_ir_pane" ]; then
       if [ "$_ir_wt" = 1 ]; then
         if ! hcall worktree create --branch "orch/$RUN_ID/$(printf '%02d' "$_ir_ord")-$(slugify "$_ir_title")" --no-focus; then
           printf 'FAILED   %s: worktree create (%s)\n' "$_ir_label" "$H_ERR"; _ir_failed=$((_ir_failed + 1)); continue
         fi
-        _ir_wsid=$(printf '%s' "$H_OUT" | jq -r '.result.workspace.workspace_id')
-        _ir_dir=$(printf '%s' "$H_OUT" | jq -r '.result.worktree.path')
+        _ir_wsid=$(printf '%s' "$H_OUT" | jq -r '.result.workspace.workspace_id // empty')
+        _ir_dir=$(printf '%s' "$H_OUT" | jq -r '.result.worktree.path // empty')
         _ir_pane=$(printf '%s' "$H_OUT" | jq -r '.result.root_pane.pane_id // empty')
         if [ -z "$_ir_pane" ] && hcall pane list --workspace "$_ir_wsid"; then
           _ir_pane=$(printf '%s' "$H_OUT" | jq -r '.result.panes[0].pane_id // empty')
+        fi
+        if [ -z "$_ir_wsid" ] || [ -z "$_ir_dir" ]; then
+          printf 'FAILED   %s: worktree create returned no workspace or path\n' "$_ir_label"; _ir_failed=$((_ir_failed + 1)); continue
         fi
         _ir_wtcol=$_ir_dir
       else
@@ -146,7 +166,7 @@ EOF
         if ! hcall pane split $_tgt_args --cwd "$WS" --no-focus; then
           printf 'FAILED   %s: pane split (%s)\n' "$_ir_label" "$H_ERR"; _ir_failed=$((_ir_failed + 1)); continue
         fi
-        _ir_pane=$(printf '%s' "$H_OUT" | jq -r '.result.pane.pane_id')
+        _ir_pane=$(printf '%s' "$H_OUT" | jq -r '.result.pane.pane_id // empty')
         _ir_wsid=$(printf '%s' "$H_OUT" | jq -r '.result.pane.workspace_id // empty')
         [ -n "$_ir_wsid" ] || _ir_wsid=$(ledger_run_get workspace herdr_workspace_id)
         _ir_dir=$WS; _ir_wtcol=-
@@ -191,7 +211,7 @@ sub_pool() {
   _po_run=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --run) _po_run=${2:-}; shift 2 ;;
+      --run) [ $# -ge 2 ] || usage_die "--run needs a value"; _po_run=$2; shift 2 ;;
       *) usage_die "pool: unknown argument: $1" ;;
     esac
   done
