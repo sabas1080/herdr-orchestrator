@@ -416,6 +416,135 @@ EOF
   fi
 }
 
+# ---- wait --------------------------------------------------------------------
+# read_hash AGENT: hash of recent output, ignoring the last 3 lines (spinners,
+# timers) and digits, so only real progress changes it (spec §6, advisory).
+read_hash() {
+  herdr agent read "$1" --source recent-unwrapped --lines 200 2>/dev/null |
+    sed '$d' | sed '$d' | sed '$d' | tr -d '0-9' | cksum
+}
+sub_wait() {
+  _wt_run=""; _wt_t=""; _wt_to=""; _wt_stuck=1800
+  while [ $# -gt 0 ]; do
+    [ $# -ge 2 ] || usage_die "wait: $1 needs a value"
+    case "$1" in
+      --run) _wt_run=$2 ;; --task) _wt_t=$2 ;; --timeout) _wt_to=$2 ;; --stuck-secs) _wt_stuck=$2 ;;
+      *) usage_die "wait: unknown argument: $1" ;;
+    esac
+    shift 2
+  done
+  case "$_wt_to" in *[!0-9]*) usage_die "wait: --timeout must be a number of milliseconds" ;; esac
+  case "$_wt_stuck" in ''|*[!0-9]*) usage_die "wait: --stuck-secs must be a number" ;; esac
+  [ -n "$_wt_t" ] || usage_die "wait: --task is required"
+  require_run "$_wt_run"
+  _wt_state=$(ledger_get "$_wt_t" estado)
+  case "$_wt_state" in running|awaiting-approval) ;;
+    *) usage_die "wait: task $_wt_t is ${_wt_state:-unknown} (needs running or awaiting-approval)" ;; esac
+  _wt_name=$(ledger_get "$_wt_t" agent_name)
+  _wt_start=$(date +%s); _wt_deadline=0
+  [ -z "$_wt_to" ] || _wt_deadline=$(( _wt_start + (_wt_to + 999) / 1000 ))
+  _wt_prev=""; _wt_since=$_wt_start
+  while :; do
+    hcall agent wait "$_wt_name" --timeout 60000
+    if [ "$H_ERR" = agent_not_found ]; then _wt_st=gone; else _wt_st=$(agent_status "$_wt_name"); fi
+    case "$_wt_st" in
+      idle|done)
+        with_lock set_state "$_wt_t" completed "$_wt_st"
+        printf 'wait: %s completed (%s); next: orch.sh verify --task %s\n' "$_wt_t" "$_wt_st" "$_wt_t"; exit 0 ;;
+      blocked)
+        [ "$(ledger_get "$_wt_t" estado)" = awaiting-approval ] || with_lock set_state "$_wt_t" awaiting-approval blocked
+        notify "$_wt_t: $_wt_name needs approval" request
+        printf 'wait: %s awaiting approval in pane %s; ask the user, then wait again\n' "$_wt_t" "$(ledger_get "$_wt_t" pane_id)"; exit 5 ;;
+      gone)
+        with_lock set_state "$_wt_t" interrupted "" "wait: agent $_wt_name is gone"
+        printf 'wait: %s interrupted (agent %s is gone)\n' "$_wt_t" "$_wt_name"; exit 1 ;;
+      working)
+        [ "$(ledger_get "$_wt_t" estado)" != awaiting-approval ] || with_lock set_state "$_wt_t" running working ;;
+    esac
+    _wt_now=$(date +%s)
+    _wt_hash=$(read_hash "$_wt_name")
+    if [ "$_wt_hash" = "$_wt_prev" ]; then
+      if [ $(( _wt_now - _wt_since )) -ge "$_wt_stuck" ]; then
+        printf 'wait: %s stuck: no output change for %ss (advisory; estado unchanged). Keep waiting or cancel and reassign.\n' "$_wt_t" "$_wt_stuck"
+        exit 4
+      fi
+    else
+      _wt_prev=$_wt_hash; _wt_since=$_wt_now
+    fi
+    if [ "$_wt_deadline" -gt 0 ] && [ "$_wt_now" -ge "$_wt_deadline" ]; then
+      with_lock set_state "$_wt_t" outcome-unknown "" "wait: timeout after ${_wt_to}ms"
+      printf 'wait: %s timeout; outcome-unknown; run: orch.sh reconcile --task %s\n' "$_wt_t" "$_wt_t"; exit 3
+    fi
+  done
+}
+
+# ---- reconcile -----------------------------------------------------------------
+sub_reconcile() {
+  _rc_run=""; _rc_t=""
+  while [ $# -gt 0 ]; do
+    [ $# -ge 2 ] || usage_die "reconcile: $1 needs a value"
+    case "$1" in --run) _rc_run=$2 ;; --task) _rc_t=$2 ;; *) usage_die "reconcile: unknown argument: $1" ;; esac
+    shift 2
+  done
+  [ -n "$_rc_t" ] || usage_die "reconcile: --task is required"
+  require_run "$_rc_run"
+  _rc_state=$(ledger_get "$_rc_t" estado)
+  case "$_rc_state" in outcome-unknown|launching|running|awaiting-approval) ;;
+    *) usage_die "reconcile: task $_rc_t is ${_rc_state:-unknown} (needs launching, outcome-unknown, running or awaiting-approval)" ;; esac
+  _rc_name=$(ledger_get "$_rc_t" agent_name)
+  _rc_out=$(ledger_get "$_rc_t" output_path)
+  _rc_st=$(agent_status "$_rc_name")
+  case "$_rc_st" in
+    gone) _rc_new=interrupted; _rc_rt=""; _rc_note="reconcile: agent gone" ;;
+    working) _rc_new=running; _rc_rt=working; _rc_note="" ;;
+    blocked) _rc_new=awaiting-approval; _rc_rt=blocked; _rc_note="" ;;
+    idle|done)
+      _rc_rt=$_rc_st
+      if [ -f "$_rc_out" ]; then _rc_new=completed; _rc_note="reconcile: report present"
+      elif herdr agent read "$_rc_name" --source recent-unwrapped --lines 400 2>/dev/null |
+             grep -F -- "$(task_marker "$_rc_t")" >/dev/null; then
+        _rc_new=completed; _rc_note="reconcile: prompt seen, no report yet"
+      else _rc_new=pending; _rc_rt=""; _rc_note="reconciled: prompt not delivered"; fi ;;
+    *) printf 'reconcile: %s unchanged (agent status %s)\n' "$_rc_t" "$_rc_st"; exit 3 ;;
+  esac
+  if ! allowed_transition "$_rc_state" "$_rc_new"; then
+    printf 'reconcile: %s stays %s (observed %s; %s -> %s is not allowed)\n' "$_rc_t" "$_rc_state" "$_rc_st" "$_rc_state" "$_rc_new"
+    exit 3
+  fi
+  with_lock set_state "$_rc_t" "$_rc_new" "$_rc_rt" "$_rc_note"
+  printf 'reconcile: %s -> %s (agent %s)\n' "$_rc_t" "$_rc_new" "$_rc_st"
+  [ "$_rc_new" != awaiting-approval ] || exit 5
+}
+
+# ---- verify --------------------------------------------------------------------
+sub_verify() {
+  _vf_run=""; _vf_t=""
+  while [ $# -gt 0 ]; do
+    [ $# -ge 2 ] || usage_die "verify: $1 needs a value"
+    case "$1" in --run) _vf_run=$2 ;; --task) _vf_t=$2 ;; *) usage_die "verify: unknown argument: $1" ;; esac
+    shift 2
+  done
+  [ -n "$_vf_t" ] || usage_die "verify: --task is required"
+  require_run "$_vf_run"
+  _vf_state=$(ledger_get "$_vf_t" estado)
+  [ "$_vf_state" = completed ] || usage_die "verify: task $_vf_t is ${_vf_state:-unknown} (needs completed)"
+  _vf_crit=$(ledger_get "$_vf_t" criterion)
+  _vf_out=$(ledger_get "$_vf_t" output_path)
+  _vf_bad=0
+  [ -f "$_vf_out" ] || { printf '[FAIL] %s report missing: %s\n' "$_vf_t" "$_vf_out"; _vf_bad=1; }
+  while IFS= read -r _vf_e; do
+    [ -n "$_vf_e" ] || continue
+    if ! _vf_r=$(sh "$SKILL_SCRIPTS/check_evidence.sh" "$_vf_e" "$_vf_crit"); then
+      printf '[FAIL] %s %s: %s\n' "$_vf_t" "$_vf_e" "${_vf_r#\[FAIL\] }"; _vf_bad=1
+    fi
+  done <<EOF
+$(ledger_list "$_vf_t" evidence_refs)
+EOF
+  [ "$_vf_bad" = 0 ] || exit 1
+  with_lock set_state "$_vf_t" verified
+  printf '[OK] %s verified; report: %s\n' "$_vf_t" "$_vf_out"
+}
+
 # ---- dispatcher --------------------------------------------------------------
 cmd=${1:-help}
 [ $# -gt 0 ] && shift
@@ -429,5 +558,8 @@ case "$cmd" in
   pool) sub_pool "$@" ;;
   task) sub_task "$@" ;;
   dispatch) sub_dispatch "$@" ;;
+  wait) sub_wait "$@" ;;
+  reconcile) sub_reconcile "$@" ;;
+  verify) sub_verify "$@" ;;
   *) usage_text >&2; usage_die "unknown subcommand: $cmd" ;;
 esac

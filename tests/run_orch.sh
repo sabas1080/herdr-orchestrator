@@ -342,6 +342,110 @@ resp agent_prompt "$(agent_json "$N1" done)"
 check fix5-selfprompt 0 "completed" orch dispatch --task W1 --prompt-file "$WS/.herdr-orch/t/W1/prompt.md"
 check fix5-selfprompt-once 0 "1" grep -c UNIQUE-BODY-LINE "$WS/.herdr-orch/t/W1/prompt.md"
 
+# ---- Task 6: wait / reconcile / verify -------------------------------------
+# running_task CASE: setup_run + W1 dispatched and left running
+running_task() {
+  setup_run "$1"
+  orch task add --id W1 --worker 1 --criterion 'the "README" lists a:b' --scope docs/a >/dev/null
+  resp agent_prompt '' 1 "$(herr timeout)"
+  orch dispatch --task W1 --prompt-file "$WS/task.md" >/dev/null
+  unresp agent_prompt
+  resp agent_wait "$(agent_json "$N1" idle)"
+  resp agent_read 'some output'
+}
+running_task wait-done
+check wait-completed 0 "completed" orch wait --task W1
+check wait-completed-state 0 "completed" st W1
+
+running_task wait-blocked
+resp agent_get "$(agent_json "$N1" blocked)"
+check wait-blocked 5 "approval" orch wait --task W1
+check wait-blocked-state 0 "awaiting-approval" st W1
+resp agent_get "$(agent_json "$N1" idle)"
+check wait-after-approval 0 "completed" orch wait --task W1
+
+running_task wait-gone
+resp agent_wait '' 1 "$(herr agent_not_found)"
+check wait-gone 1 "interrupted" orch wait --task W1
+check wait-gone-state 0 "interrupted" st W1
+
+running_task wait-stuck
+resp agent_get "$(agent_json "$N1" working)"
+resp agent_wait '' 1 "$(herr timeout)"
+check wait-stuck 4 "stuck" orch wait --task W1 --stuck-secs 0
+check wait-stuck-state-unchanged 0 "running" st W1
+
+running_task wait-timeout
+resp agent_get "$(agent_json "$N1" working)"
+resp agent_wait '' 1 "$(herr timeout)"
+check wait-timeout 3 "timeout" orch wait --task W1 --timeout 1
+check wait-timeout-state 0 "outcome-unknown" st W1
+
+# reconcile from outcome-unknown
+unknown_task() {
+  setup_run "$1"
+  orch task add --id W1 --worker 1 --criterion c --scope docs/a >/dev/null
+  resp agent_prompt '' 1 "$(herr agent_prompt_stalled)"
+  orch dispatch --task W1 --prompt-file "$WS/task.md" >/dev/null
+}
+unknown_task rec-report
+mkdir -p "$WS/.herdr-orch/t/W1"; printf '# r\n' > "$WS/.herdr-orch/t/W1/report.md"
+check rec-report-completed 0 "completed" orch reconcile --task W1
+unknown_task rec-not-delivered
+resp agent_read 'unrelated scrollback'
+check rec-not-delivered 0 "pending" orch reconcile --task W1
+unresp agent_prompt; resp agent_prompt "$(agent_json "$N1" done)"
+check rec-redispatch-works 0 "completed" orch dispatch --task W1 --prompt-file "$WS/task.md"
+unknown_task rec-marker-seen
+resp agent_read "[herdr-orch t/W1] Read and execute $WS/.herdr-orch/t/W1/prompt.md"
+check rec-marker-seen 0 "completed" orch reconcile --task W1
+unknown_task rec-working
+resp agent_get "$(agent_json "$N1" working)"
+check rec-working 0 "running" orch reconcile --task W1
+unknown_task rec-gone
+resp agent_get '' 1 "$(herr agent_not_found)"
+check rec-gone 0 "interrupted" orch reconcile --task W1
+
+# verify (Review Focus 1: quoted criterion round trip)
+running_task verify-ok
+orch wait --task W1 >/dev/null
+printf '# r\n' > "$WS/.herdr-orch/t/W1/report.md"
+printf 'criterion: "the \\"README\\" lists a:b"\nresult: "pass"\nobserved: "read it"\n' > "$WS/.herdr-orch/t/W1/evidence.yml"
+check verify-ok 0 "verified" orch verify --task W1
+check verify-ok-state 0 "verified" st W1
+running_task verify-missing
+orch wait --task W1 >/dev/null
+printf '# r\n' > "$WS/.herdr-orch/t/W1/report.md"
+check verify-missing-evidence 1 "[FAIL]" orch verify --task W1
+check verify-missing-state 0 "completed" st W1
+check verify-not-completed 2 "needs completed" orch verify --task W9
+
+# launching reconcile (controller ruling 1)
+launching_task() {
+  setup_run "$1"
+  orch task add --id W1 --worker 1 --criterion c --scope docs/a >/dev/null
+  (cd "$WS" && SKILL_SCRIPTS=$SCRIPTS && . "$SCRIPTS/lib/orch_common.sh" && . "$SCRIPTS/lib/orch_ledger.sh" && resolve_run t && with_lock set_state W1 launching)
+}
+launching_task rec-launch-pending
+resp agent_read 'unrelated scrollback'
+check rec-launch-pending 0 "pending" orch reconcile --task W1
+check rec-launch-pending-state 0 "pending" st W1
+resp agent_prompt "$(agent_json "$N1" done)"
+check rec-launch-redispatch 0 "completed" orch dispatch --task W1 --prompt-file "$WS/task.md"
+launching_task rec-launch-working
+resp agent_get "$(agent_json "$N1" working)"
+check rec-launch-working 0 "running" orch reconcile --task W1
+check rec-launch-working-state 0 "running" st W1
+
+# dispatch --wait end-to-end on a running result (controller ruling 3)
+setup_run dispatch-wait
+orch task add --id W1 --worker 1 --criterion c --scope docs/a >/dev/null
+resp agent_prompt '' 1 "$(herr timeout)"
+resp agent_wait "$(agent_json "$N1" idle)"
+resp agent_read 'some output'
+check dispatch-wait-running 0 "completed" orch dispatch --task W1 --prompt-file "$WS/task.md" --wait
+check wait-bad-timeout 2 "" orch wait --task W1 --timeout abc
+
 # ---- orch.sh subcommand cases are appended by Tasks 4-7 --------------------
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAILS"

@@ -97,7 +97,7 @@ ledger_update() {
 # State machine (spec §5). allowed_transition FROM TO -> 0 when allowed.
 allowed_transition() {
   case "$1>$2" in
-    'pending>launching'|'launching>running'|'launching>completed'|'launching>awaiting-approval'|'launching>outcome-unknown') return 0 ;;
+    'pending>launching'|'launching>running'|'launching>completed'|'launching>awaiting-approval'|'launching>outcome-unknown'|'launching>pending') return 0 ;;
     'running>running'|'running>completed'|'running>awaiting-approval'|'running>outcome-unknown'|'running>interrupted') return 0 ;;
     'awaiting-approval>awaiting-approval'|'awaiting-approval>running'|'awaiting-approval>completed'|'awaiting-approval>outcome-unknown'|'awaiting-approval>interrupted') return 0 ;;
     'outcome-unknown>outcome-unknown'|'outcome-unknown>running'|'outcome-unknown>completed'|'outcome-unknown>awaiting-approval'|'outcome-unknown>interrupted'|'outcome-unknown>pending') return 0 ;;
