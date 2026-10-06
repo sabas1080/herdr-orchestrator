@@ -36,12 +36,12 @@ The task file you pass with `--prompt-file` holds only the task body (objective,
 
 1. **Split the task** into deliverables with a verifiable criterion and a write scope each. `orch.sh suggest-count FILE` advises 1–3 workers (works outside herdr).
 2. **`preflight`** — `gate=ready` required (it also reports `template=ok|missing`; `missing` is an error). Otherwise degraded mode A: deliver the plan only.
-3. **`init-run --worker KIND[:Title]…`** — one flag per worker; titles may contain spaces. Default titles come from the dragon catalog. Rerun with the same `--run-id` to complete a partial start (never create workers by hand). Add `--worktree` **only if the user asked** for isolated git worktrees.
+3. **`init-run --worker KIND[:Title]…`** — one flag per worker; titles may contain spaces. Default titles come from the dragon catalog. Rerun with the same `--run-id` to complete a partial start (never create workers by hand). Add `--worktree` **only if the user asked** for isolated git worktrees. `--agent-arg ARG` (repeatable) is passed after `--` to `herdr agent start`, e.g. `--agent-arg --permission-mode --agent-arg auto` so Claude workers do not stop at approval prompts; use it **only when the user wants unattended workers**. A new folder or worktree triggers Claude's folder-trust dialog: the user answers it once (H8), then rerun `init-run`.
 4. **`task add`** per task — the ledger is validated on every add; overlapping scopes need `--deps`.
 5. **Write each task file and `dispatch`** (`--wait` to block until it settles).
 6. **`wait`** — exit `0` completed; `1` worker gone (task `interrupted`) or persistent herdr errors (state unchanged); `3` timeout/outcome unknown → `reconcile`; `4` stuck (advisory) → keep waiting or Degraded D; `5` approval pending → **ask the user**, then `wait` again.
 7. **`verify`** — read only the task's `report.md`; the evidence gate decides `verified`.
-8. **`close`** (`--allow-degraded` when some task legitimately failed) and deliver the output contract. `teardown` is a dry run; `teardown --confirm` closes the run's worker panes only when the user wants them gone.
+8. **`close`** (`--allow-degraded` when some task legitimately failed) and deliver the output contract. `teardown` is a dry run; `teardown --confirm` closes the run's worker panes only when the user wants them gone; with `--remove-worktrees` each worktree is removed instead of closing its pane.
 
 ## Hard rules
 

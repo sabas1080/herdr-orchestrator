@@ -1,109 +1,77 @@
-# Decision trees — two-level OpenCode V2 flow
+# Decision trees
 
-The active instance contract and the [canonical ledger template](ledger-template.md) take precedence. V2 session HTTP routes are marked experimental; verify against the `/openapi.json` of the confirmed endpoint before calling them. [V2 API](https://opencode.ai/v2/docs/api/)
+## Tree 1 Preflight
 
-## Tree 1 — Are instance, location, and controls confirmed?
+```text
+orch.sh preflight
+ |
+ +-- exit 0, gate=ready, template=ok --> init-run
+ |
+ +-- exit 2 (no HERDR_ENV, herdr/jq missing, client/server incompatible, template missing)
+       --> degraded mode A: deliver the plan and the proposed tasks; claim nothing ran
+```
 
-Before creating a session or delegating:
+## Tree 2 Scopes
 
-- Confirm authorization and instance with `GET /api/info`; check `/openapi.json` on that same endpoint for version and available routes.
-- Obtain the location from `GET /api/location` and compare it with the orchestrator session. Fix a single canonical `run.location.directory`.
-- If the user asked to see the sessions as tabs, check that the TUI's effective tabs mode is not `off` (explicit `tabs.mode` `on`, or `auto` without `HERDR_ENV=1` in the TUI process, or legacy `tabs.enabled: true` without `mode`; full rule in [recipe-tui-tabs.md](recipe-tui-tabs.md) §3) and that the client allows opening the existing session and verifying the tab by `sessionID`; if the user did not ask for tabs, an unverifiable tab does not block (mark "not verified"; see Degraded mode in [SKILL.md](../SKILL.md#degraded-mode)). Creating the session over HTTP does not open the tab (invariant and tab mechanisms: [api-and-sessions.md](api-and-sessions.md#root-worker-session-creating-a-session-and-opening-a-tab-are-distinct-actions)). [V2 TUI](https://opencode.ai/v2/docs/cli/tui/), [CLI plugin API](https://opencode.ai/v2/docs/build/plugins/cli/), [CLI config](https://opencode.ai/v2/docs/cli/config)
-- Inspect the catalog of agents, modes, and effective permissions. Confirm the worker can use `subagent`, that the two chosen child agents exist, and that they can run as children. [V2 Agents](https://opencode.ai/v2/docs/agents), [V2 Tools](https://opencode.ai/v2/docs/tools/)
+```text
+Do two tasks' write scopes overlap (same files or one inside the other)?
+ |
+ +-- no  --> run them in parallel on different workers
+ |
+ +-- yes --> can one wait for the other?
+       |
+       +-- yes --> task add --deps <first>   (serialize)
+       |
+       +-- no  --> did the USER ask for isolated worktrees?
+             |
+             +-- yes --> init-run --worktree (one branch per worker)
+             |
+             +-- no  --> split the scopes differently, or ask the user
+```
 
-    Are instance, location, permissions, and tools confirmed (and, if the user asked for tabs, the ability to open and verify the tab confirmed)?
-    ├── NO  → Record the missing preflight; do not claim success or send work.
-    └── YES → Tree 2.
+## Tree 3 Waiting
 
-Routes must refer to the OpenCode server filesystem. For Windows, Linux, and macOS pass the canonical value without transforming it by the client system; if it does not correspond to the same instance/location, stop. [V2 API](https://opencode.ai/v2/docs/api/)
+```text
+orch.sh wait --task ID
+ |
+ +-- exit 0 --> verify
+ +-- exit 1 --> agent gone: task interrupted --> ask the user before recreating
+ |              herdr error x3: estado unchanged --> preflight, retry wait
+ +-- exit 3 --> reconcile --task ID --> pending? re-dispatch (after Verify effects)
+ |                                      running / awaiting-approval / completed? continue
+ +-- exit 4 --> stuck (advisory): keep waiting, or
+ |              task set --estado cancelled --notas "<effects>" + task add (new ID, other worker)
+ +-- exit 5 --> tell the user which pane needs approval --> wait again (never approve)
+```
 
-## Tree 1b — Which title nomenclature and how do I pass the worker list?
+## Tree 4 Closing
 
-Before creating sessions, decide how they will be named. The canonical pattern is `[NN] Name` (detail in [naming-convention.md](naming-convention.md)):
+```text
+Is every task terminal?
+ |
+ +-- no  --> keep waiting / reconcile / verify; nothing is closed while a task is pending, completed or active
+ |
+ +-- yes --> are all verified?
+       |
+       +-- yes --> orch.sh close --> TOTAL ... 0 failed --> output contract
+       |
+       +-- no (failed, partial, blocked, cancelled, interrupted with a reason in notas)
+             --> orch.sh close --allow-degraded --> report the run as degraded and list each notas
+```
 
-- **`[00]`** is always the orchestrator root's slot: `init-run` creates it alone, and `--title` changes the name, not the number.
-- Workers start at **`[01]`** and follow correlatively. The interface applies the correlative and **reassigns an explicit `[00]`** to the next free ordinal.
-- The proper name describes the scope (`[01] Vermithrax` for offensive analysis); the run ID already lives in the ledger, so the title does not repeat it.
+## Tree 5 Destructive actions
 
-How do I pass the worker list?
-
-    ├── Titles with spaces? (almost always yes, they are readable)
-    │     ├── YES → `--worker "T1" --worker "T2"` (one flag per session; unambiguous)
-    │     │        or `--workers "T1, T2"` (comma-delimited list)
-    │     └── NEVER → `--workers "T1 T2"`: the space is part of the title,
-    │                  not a delimiter; it would split each title into two sessions.
-    └── Without a number and want it auto-numbered?
-          └── YES → `worker_list` assigns `01, 02, 03...` in entry order.
-
-Dedup compares by **name ignoring the ordinal**, so `--worker "Vermithrax"` reuses `[01] Vermithrax` instead of creating a duplicate. If `init-run` responds `INCOMPLETO` and exits 1, some worker was not created: rerun with the same titles and dedup completes what was missing. [Nomenclature](naming-convention.md)
-
-## Tree 2 — Can the root worker be started with verifiable identity?
-
-    Does the orchestrator have a documented route to create the worker session?
-    ├── NO  → Leave the run blocked with the missing access/capability.
-    └── YES → Separately create a root `worker_session` with an explicit
-                `location.directory` equal to `run.location.directory`.
-                Confirm `sessionID`, `parentID: null`, and `Session.Info.location`.
-                Only if the user asked for tabs: open that same session in the TUI
-                and verify the tab with that ID (creation by API does not open the
-                tab); otherwise mark the tab "not verified" and proceed.
-                The API is experimental.
-
-If the current HTTP API is not authorized or cannot verify server, session, or location, do not substitute it with private client routes. If the session was created but the tab could not be verified, keep the session as such and mark the opening as not verified; reconcile before retrying. [V2 API](https://opencode.ai/v2/docs/api/), [V2 TUI](https://opencode.ai/v2/docs/cli/tui/)
-
-When the authorized integration includes the local private-state method, follow its version and concurrency gates in [recipe-tui-tabs.md](recipe-tui-tabs.md); the recipe may fail-closed if it cannot prove it modifies the correct TUI state.
-
-## Tree 3 — Does the worker have a valid child plan?
-
-The worker divides its write budget into tasks whose scope fits within its own. Each child uses the native `subagent` tool from the worker session; each child must have its own `sessionID`, a real `parentID` of the worker, and location per the [single rule](subagent-contract.md#single-rule-for-child-location). The session API is not the `subagent` tool nor does it invoke it. [V2 Tools](https://opencode.ai/v2/docs/tools/), [V2 API](https://opencode.ai/v2/docs/api/)
-
-    Are there at least two distinct child tasks and valid agents?
-    ├── NO  → Replan; do not mark the worker `verified`.
-    └── YES → Do their write scopes overlap?
-        ├── YES → Serialize with a dependency ([scope rule](agents-and-safety.md#write-budget-and-scopes)).
-        └── NO  → Can run in parallel if they do not compete for another resource.
-
-A worker only reaches `verified` with the gate from [ledger-template.md](ledger-template.md#verified-worker-gate); it may remain `failed`, `blocked`, or `partial` without faking the minimum.
-
-## Tree 4 — Can it run now without conflict or invented limit?
-
-    Is there a pending dependency or shared scope/resource in parallel?
-    ├── YES → Serialize per the DAG and wait for each writer to finish.
-    └── NO  → Does the ledger record an observed real limit in
-              `run.max_sessions_in_flight` with evidence?
-        ├── YES → Count active workers and subagents; keep a reserve for
-        │         unknown state and pending approvals.
-        └── NO  → Do not impose a fixed, unobserved number. Launch based on observed
-                  resources and scopes, keeping dependency order.
-
-The DAG represents execution order, never parent-child ownership. Ownership is expressed with `task_kind`, `parent_task_id`, and the observed runtime `parentID`. The optional limit is defined in [ledger-template.md](ledger-template.md#optional-max_sessions_in_flight-limit); local states live in the ledger. [V2 API](https://opencode.ai/v2/docs/api/)
-
-## Tree 5 — Did the worker integrate and report enough evidence?
-
-    Were every result, effect, and approval of the two levels reconciled?
-    ├── NO  → Keep the unknown/active state, preserve occupied scopes,
-    │         and reconcile by mechanisms published in the `/openapi.json`
-    │         ([wait rules](api-and-sessions.md#wait-reconciliation-rules):
-    │         children by `parentID`, envelopes, deadline re-armable).
-    └── YES → Does the worker's report inspect and integrate the children and cite
-              verifiable evidence?
-        ├── NO  → Mark `partial` or `blocked`; request the missing information.
-        └── YES → The orchestrator validates evidence, updates the single-owner
-                  ledger, and marks `verified` only if the minimum is met.
-
-Do not infer that the tab, a stream silence, or a summary alone proves completion. The return channel and responses must be confirmed by the instance; if they cannot be read, the result is not verifiable. [Failure matrix](failure-matrix.md), [API and sessions](api-and-sessions.md)
-
-## Tree 6 — Is the next action destructive?
-
-    Does it delete sessions, children, or persistent data?
-    ├── YES → Stop; require authorization for the exact ID and confirm the cascade
-    │         effect in the active `/openapi.json`.
-    └── NO  → Proceed within the authorized scope and record evidence.
-
-## Official sources
-
-- [V2 HTTP API](https://opencode.ai/v2/docs/api/) — sessions, location, and schemas; experimental surface.
-- [V2 TUI](https://opencode.ai/v2/docs/cli/tui/) — open and switch sessions.
-- [CLI plugin API](https://opencode.ai/v2/docs/build/plugins/cli/) — tab opening and listing in an existing interface.
-- [CLI config](https://opencode.ai/v2/docs/cli/config) — tabs mode and scope.
-- [V2 Agents](https://opencode.ai/v2/docs/agents) and [V2 Tools](https://opencode.ai/v2/docs/tools/) — catalog, permissions, and native delegation.
+```text
+About to close a pane or remove a worktree?
+ |
+ +-- created by this run (listed in workers.tsv / orch.sh teardown dry run)?
+ |     |
+ |     +-- no  --> do not touch it
+ |     +-- yes --> did the user explicitly ask?
+ |           |
+ |           +-- no  --> do not; leave panes open
+ |           +-- yes --> orch.sh teardown (review) --> teardown --confirm
+ |                       worktrees: add --remove-worktrees only if the user asked
+ |
+ +-- --force, --trust-repository, herdr server stop --> only with the user's explicit say-so
+```

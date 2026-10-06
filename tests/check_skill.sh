@@ -4,6 +4,8 @@ set -u
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
 S=$ROOT/SKILL
 FAILS=0
+LINKS_OUT=$(mktemp "${TMPDIR:-/tmp}/check_links.XXXXXX") || exit 2
+trap 'rm -f "$LINKS_OUT"' EXIT
 fail() { printf 'FAIL %s\n' "$1"; FAILS=$((FAILS + 1)); }
 ok() { printf 'ok   %s\n' "$1"; }
 head -n 1 "$S/SKILL.md" | grep -qx -- '---' && ok frontmatter-start || fail frontmatter-start
@@ -19,9 +21,8 @@ for f in "$S/SKILL.md" "$S"/references/*.md "$S"/scripts/prompt-templates/*.md; 
     case "$l" in ''|http*|mailto:*) continue ;; esac
     [ -e "$d/$l" ] || printf 'FAIL broken link in %s: %s\n' "${f#$ROOT/}" "$l"
   done
-done > "$ROOT/.check_links.out"
-if [ -s "$ROOT/.check_links.out" ]; then cat "$ROOT/.check_links.out"; FAILS=$((FAILS + 1)); else ok links; fi
-rm -f "$ROOT/.check_links.out"
+done > "$LINKS_OUT"
+if [ -s "$LINKS_OUT" ]; then cat "$LINKS_OUT"; FAILS=$((FAILS + 1)); else ok links; fi
 # No OpenCode plumbing left in the package.
 if grep -rIl -E 'orchestrate\.sh|/openapi\.json|tabs\.json|parentID|sessionID|service\.json' "$S" >/dev/null; then
   grep -rIn -E 'orchestrate\.sh|/openapi\.json|tabs\.json|parentID|sessionID|service\.json' "$S" | head -20
