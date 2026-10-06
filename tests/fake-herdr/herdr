@@ -9,6 +9,11 @@ set -u
 d=${FAKE_HERDR_DIR:?FAKE_HERDR_DIR not set}
 key="${1:-}_${2:-}"
 printf '%s\n' "$*" >> "$d/calls.log"
+# Optional: if $FAKE_HERDR_DIR/argv.log exists, also log one line per argument
+# ("ARGV" header line per call, then each arg), so spaces are unambiguous.
+if [ -e "$d/argv.log" ]; then
+  { printf 'CALL\n'; for a in "$@"; do printf 'ARG=%s\n' "$a"; done; } >> "$d/argv.log"
+fi
 cnt=$d/.count.$key
 n=$(( $(cat "$cnt" 2>/dev/null || echo 0) + 1 ))
 printf '%s\n' "$n" > "$cnt"

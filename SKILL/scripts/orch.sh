@@ -15,7 +15,7 @@ trap 'lock_release; exit 130' INT TERM
 usage_text() {
   cat <<'USAGE'
 orch.sh preflight
-orch.sh init-run [--run-id ID] --worker KIND[:Title]... [--worktree]
+orch.sh init-run [--run-id ID] --worker KIND[:Title]... [--worktree] [--agent-arg ARG]...
 orch.sh pool [--run ID]
 orch.sh task add --id ID --worker NAME|NN --criterion TEXT --scope A[,B] [--deps X[,Y]] [--run ID]
 orch.sh task set --task ID --estado cancelled|failed|partial|blocked|interrupted --notas TEXT [--run ID]
@@ -60,12 +60,32 @@ split_target() {
   else _tgt_args="--current --direction right"; fi
 }
 
+# agent_start_with_args NAME KIND PANE ARGS_NL: hcall agent start, passing the
+# newline-separated ARGS_NL (if non-empty) as separate native args after `--`.
+agent_start_with_args() {
+  _as_a=$4
+  set -- agent start "$1" --kind "$2" --pane "$3"
+  if [ -n "$_as_a" ]; then
+    set -- "$@" --
+    _as_old=$IFS; IFS='
+'
+    for _as_x in $_as_a; do set -- "$@" "$_as_x"; done
+    IFS=$_as_old
+  fi
+  hcall "$@"
+}
+
 sub_init_run() {
-  _ir_run=""; _ir_wt=0; _ir_specs=""
+  _ir_run=""; _ir_wt=0; _ir_specs=""; _ir_aargs=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --run-id) [ $# -ge 2 ] || usage_die "--run-id needs a value"; _ir_run=$2; shift 2 ;;
       --worker) [ $# -ge 2 ] || usage_die "--worker needs KIND[:Title]"; _ir_specs="$_ir_specs$2
+"; shift 2 ;;
+      --agent-arg) [ $# -ge 2 ] || usage_die "--agent-arg needs a value"
+        case "$2" in *'
+'*) usage_die "--agent-arg value must not contain a newline" ;; esac
+        _ir_aargs="$_ir_aargs$2
 "; shift 2 ;;
       --worktree) _ir_wt=1; shift ;;
       *) usage_die "init-run: unknown argument: $1" ;;
@@ -183,7 +203,7 @@ EOF
       printf 'FAILED   %s: pane %s has no idle shell in the foreground\n' "$_ir_label" "$_ir_pane"
       _ir_failed=$((_ir_failed + 1)); continue
     fi
-    if hcall agent start "$_ir_name" --kind "$_ir_kind" --pane "$_ir_pane"; then
+    if agent_start_with_args "$_ir_name" "$_ir_kind" "$_ir_pane" "$_ir_aargs"; then
       printf 'started  %s -> %s (%s, %s)\n' "$_ir_label" "$_ir_name" "$_ir_kind" "$_ir_pane"
     else
       printf 'FAILED   %s: agent start %s (%s) — answer any dialog in pane %s, then rerun\n' \

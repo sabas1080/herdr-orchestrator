@@ -137,6 +137,18 @@ check pre-no-herdr-env 2 "HERDR_ENV" sh -c "cd '$WS' && HERDR_ENV=0 PATH='$FAKE_
 resp status_--json '{"client":{"version":"0.8.2"},"server":{"version":"0.9.0","compatible":false}}'
 check pre-incompatible 2 "gate=blocked" orch preflight
 
+new_case init-agent-args
+check aa-two 0 "run t ready" orch init-run --run-id t --worker claude --agent-arg --permission-mode --agent-arg acceptEdits
+check aa-passed 0 "" grep -Eq -- "^agent start w01-[a-z]+-[0-9a-f]{4} --kind claude --pane w1:p2 -- --permission-mode acceptEdits$" "$FAKE_HERDR_DIR/calls.log"
+new_case init-agent-args-space
+: > "$FAKE_HERDR_DIR/argv.log"
+check aa-space 0 "run t ready" orch init-run --run-id t --worker claude --agent-arg 'a b' --agent-arg c
+check aa-space-one-arg 0 "" sh -c "grep -qx 'ARG=a b' '$FAKE_HERDR_DIR/argv.log' && grep -qx 'ARG=--' '$FAKE_HERDR_DIR/argv.log' && ! grep -qx 'ARG=a' '$FAKE_HERDR_DIR/argv.log'"
+new_case init-no-agent-args
+check aa-none 0 "run t ready" orch init-run --run-id t --worker claude
+check aa-none-no-dashes 0 "" sh -c "grep '^agent start' '$FAKE_HERDR_DIR/calls.log' | grep -qv -- ' -- ' && ! grep '^agent start' '$FAKE_HERDR_DIR/calls.log' | grep -q -- ' -- '"
+check aa-missing-value 2 "--agent-arg" orch init-run --run-id t --worker claude --agent-arg
+
 new_case init
 check init-two 0 "run t1 ready" orch init-run --run-id t1 --worker claude --worker codex:Glacielle
 check init-split-count 0 "" sh -c "[ \$(grep -c '^pane split' '$FAKE_HERDR_DIR/calls.log') -eq 2 ]"
