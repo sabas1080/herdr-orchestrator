@@ -139,9 +139,9 @@ EOF
       "$(printf '%s' "$_ir_cur" | jq -r '.result.pane.workspace_id')" \
       "$(printf '%s' "$_ir_cur" | jq -r '.result.pane.tab_id')" \
       "$(printf '%s' "$_ir_cur" | jq -r '.result.pane.pane_id')" \
-      "$(printf '%s' "$_ir_cur" | jq -r '.result.pane.agent // "unknown"')"
+      "$(printf '%s' "$_ir_cur" | jq -r '.result.pane.agent // "unknown"')" || die "could not initialise $LEDGER"
   fi
-  [ -f "$WORKERS" ] || with_lock workers_init
+  [ -f "$WORKERS" ] || with_lock workers_init || die "could not initialise $WORKERS"
 
   # Pass 2: create what is missing; record each pane right after its split.
   _ir_failed=0
@@ -204,7 +204,10 @@ EOF
       if [ -z "$_ir_pane" ]; then
         printf 'FAILED   %s: no pane id returned\n' "$_ir_label"; _ir_failed=$((_ir_failed + 1)); continue
       fi
-      with_lock workers_add "$_ir_ord" "$_ir_name" "$_ir_title" "$_ir_kind" "$_ir_wsid" "$_ir_pane" "$_ir_dir" "$_ir_wtcol"
+      if ! with_lock workers_add "$_ir_ord" "$_ir_name" "$_ir_title" "$_ir_kind" "$_ir_wsid" "$_ir_pane" "$_ir_dir" "$_ir_wtcol"; then
+        printf 'FAILED   %s: could not update workers.tsv (pane %s created; close it manually)\n' "$_ir_label" "$_ir_pane"
+        _ir_failed=$((_ir_failed + 1)); continue
+      fi
       hcall pane rename "$_ir_pane" "$_ir_label" || printf 'warning: could not label pane %s (%s)\n' "$_ir_pane" "$H_ERR" >&2
     fi
     if ! wait_shell_ready "$_ir_pane"; then

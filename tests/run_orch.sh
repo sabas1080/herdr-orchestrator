@@ -7,6 +7,9 @@ ORCH=$SCRIPTS/orch.sh
 FAKE_BIN=$ROOT/tests/fake-herdr
 PASS=0; FAILS=0
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
+# Cap virtual memory (2 GiB) so a runaway reader fails here instead of taking
+# down the machine (and the herdr session the tests run in).
+ulimit -v 2097152 2>/dev/null || true
 
 check() {
   name=$1; want=$2; sub=$3; shift 3
@@ -704,7 +707,7 @@ check append-leak-fails 1 "could not be appended" sh -c "ln -s /dev/full '$R/.le
 check append-leak-ledger 0 "" cmp "$TMP/ledger.before" "$R/ledger.yaml"
 check append-leak-no-temp 0 "" sh -c "[ -z \"\$(ls -A '$R' | grep '^\.ledger\.tmp\.')\" ]"
 check append-leak-retry 0 "task W1 added" orch task add --id W1 --worker 1 --criterion c --scope docs/a
-else skip append-leak '(no /dev/full)'; fi
+else skip append-leak 'no /dev/full'; fi
 
 # Writers whose temp write fails: temp removed, non-zero, target unchanged.
 if [ "$HAVE_FULL" = 1 ]; then
@@ -754,10 +757,36 @@ if [ "$HAVE_FULL" = 1 ]; then
   check ff-teardown-warn 1 "warning: could not update workers.tsv for $N1" orch_ff "$R/workers.tsv.tmp" teardown --confirm
   check ff-teardown-fail-count 1 "teardown: 1 failure(s)" orch_ff "$R/workers.tsv.tmp" teardown --confirm
 else
-  skip lib-workers-set-fail '(no /dev/full)'; skip lib-workers-delete-fail '(no /dev/full)'
-  skip lib-ledger-new-fail '(no /dev/full)'; skip ff-initrun-set '(no /dev/full)'
-  skip ff-initrun-del '(no /dev/full)'; skip ff-teardown '(no /dev/full)'
+  skip lib-workers-set-fail 'no /dev/full'; skip lib-workers-delete-fail 'no /dev/full'
+  skip lib-ledger-new-fail 'no /dev/full'; skip ff-initrun-set 'no /dev/full'
+  skip ff-initrun-del 'no /dev/full'; skip ff-teardown 'no /dev/full'
 fi
+
+
+# init-run: a failed workers_add / ledger_new / workers_init must not go on
+new_case ff-add
+R=$WS/.herdr-orch/t
+if [ "$HAVE_FULL" = 1 ] && [ "$(id -u)" != 0 ]; then
+  orch init-run --run-id t --worker claude >/dev/null 2>&1
+  : > "$FAKE_HERDR_DIR/calls.log"
+  rm -f "$R/workers.tsv"; printf 'ord\tagent_name\n' > "$R/workers.tsv"; chmod 444 "$R/workers.tsv"
+  check ff-add-failed 1 "FAILED   [01]" orch init-run --run-id t --worker claude
+  check ff-add-msg 1 "created; close it manually)" orch init-run --run-id t --worker claude
+  check ff-add-no-start 0 "" sh -c "! grep -q '^agent start' '$FAKE_HERDR_DIR/calls.log' && ! grep -q '^pane rename' '$FAKE_HERDR_DIR/calls.log'"
+  chmod 644 "$R/workers.tsv"
+else skip ff-add 'no /dev/full or running as root'; fi
+if [ "$HAVE_FULL" = 1 ]; then
+  new_case ff-ledger-init
+  R=$WS/.herdr-orch/t; mkdir -p "$R"
+  check ff-ledger-init-fail 1 "could not initialise $WS/.herdr-orch/t/ledger.yaml" orch_ff "$R/.ledger.tmp" init-run --run-id t --worker claude
+  check ff-ledger-init-no-pane 0 "" sh -c "! grep -q '^pane split' '$FAKE_HERDR_DIR/calls.log'"
+else skip ff-ledger-init 'no /dev/full'; fi
+# workers.tsv as a directory: not -f, write fails. Never symlink a file init-run
+# reads to /dev/full: awk reads endless NULs into one record and eats all RAM.
+new_case ff-workers-init
+R=$WS/.herdr-orch/t; mkdir -p "$R/workers.tsv"
+check ff-workers-init-fail 1 "could not initialise $WS/.herdr-orch/t/workers.tsv" orch init-run --run-id t --worker claude
+check ff-workers-init-no-pane 0 "" sh -c "! grep -q '^pane split' '$FAKE_HERDR_DIR/calls.log'"
 
 # ---- orch.sh subcommand cases are appended by Tasks 4-7 --------------------
 

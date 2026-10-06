@@ -132,25 +132,31 @@ set_state() {
 }
 
 # workers.tsv (spec §4): ord agent_name title kind workspace_id pane_id directory worktree
+# Readers only open a regular file: a device such as /dev/zero would feed awk an
+# endless line and exhaust memory.
 WORKERS_HEADER='ord	agent_name	title	kind	workspace_id	pane_id	directory	worktree'
 workers_init() { printf '%s\n' "$WORKERS_HEADER" > "$WORKERS"; }
 workers_add() { printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$@" >> "$WORKERS"; }
-workers_rows() { tail -n +2 "$WORKERS"; }
+workers_rows() { [ -f "$WORKERS" ] || return 0; tail -n +2 "$WORKERS"; }
 workers_field() {
+  [ -f "$WORKERS" ] || return 0
   awk -F'\t' -v n="$1" -v c="$2" 'NR == 1 { for (i = 1; i <= NF; i++) col[$i] = i; next }
     $2 == n { print $(col[c]); exit }' "$WORKERS" 2>/dev/null
 }
 workers_field_by_ord() {
+  [ -f "$WORKERS" ] || return 0
   awk -F'\t' -v o="$1" -v c="$2" 'NR == 1 { for (i = 1; i <= NF; i++) col[$i] = i; next }
     $1 + 0 == o + 0 { print $(col[c]); exit }' "$WORKERS" 2>/dev/null
 }
 workers_set() {
+  [ -f "$WORKERS" ] || return 1
   _ws_tmp=$WORKERS.tmp.$$
   awk -F'\t' -v OFS='\t' -v n="$1" -v c="$2" -v v="$3" '
     NR == 1 { for (i = 1; i <= NF; i++) col[$i] = i; print; next }
     $2 == n { $(col[c]) = v } { print }' "$WORKERS" > "$_ws_tmp" && mv "$_ws_tmp" "$WORKERS" || { rm -f "$_ws_tmp"; return 1; }
 }
 workers_delete() {
+  [ -f "$WORKERS" ] || return 1
   _wd_tmp=$WORKERS.tmp.$$
   awk -F'\t' -v n="$1" 'NR == 1 || $2 != n' "$WORKERS" > "$_wd_tmp" && mv "$_wd_tmp" "$WORKERS" || { rm -f "$_wd_tmp"; return 1; }
 }
