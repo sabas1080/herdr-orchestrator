@@ -1,308 +1,102 @@
-# OpenCode Orchestrator Skill
+# herdr-orchestrator
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](SKILL/LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.0-green.svg)](SKILL/SKILL.md)
-[![Platform](https://img.shields.io/badge/platform-OpenCode%20V2-8A2BE2.svg)](https://opencode.ai)
-[![Author](https://img.shields.io/badge/author-DragonJAR%20SAS-orange.svg)](https://www.DragonJAR.org)
+[![Version](https://img.shields.io/badge/version-0.1.0-green.svg)](SKILL/SKILL.md)
+[![Platform](https://img.shields.io/badge/platform-herdr-8A2BE2.svg)](https://github.com/ogulcancelik/herdr)
 [![Español](https://img.shields.io/badge/read%20in-Espa%C3%B1ol-blue.svg)](README.es.md)
 
-> Deterministic, verifiable, two-level multi-agent orchestration skill for OpenCode V2. It coordinates worker sessions, delegates isolated child subagents, enforces non-overlapping filesystem write budgets, maintains a canonical YAML ledger, and provides zero-dependency POSIX validation gates.
+> A Claude Code skill that orchestrates several coding agents inside [herdr](https://github.com/ogulcancelik/herdr): the orchestrator splits the work, workers run in sibling panes, and every result is verified against written evidence before the run closes.
 
----
+## What it does
 
-## 🎯 What This Skill Does
+- **A Claude orchestrator that never implements.** It splits the task, dispatches complete task files and reads only short reports, never raw worker transcripts.
+- **Mixed-kind workers in sibling panes.** `claude`, `codex`, `opencode` and other agent kinds run side by side in the orchestrator's tab.
+- **Schema-4 ledger plus evidence gate.** `.herdr-orch/<run>/ledger.yaml` records worker identity, scopes and an explicit state machine; a task is `verified` only when its `evidence.yml` passes `check_evidence.sh`.
+- **POSIX validators.** `validate_dag.sh` and `validate_ledger_closed.sh` need only `sh` + `awk`.
+- **Fail-closed handling** of approvals, timeouts and stuck workers: the orchestrator never answers a dialog, never resends a prompt blindly and reconciles uncertain outcomes first.
 
-This skill transforms an AI agent into an enterprise-grade **Two-Level Orchestrator** for OpenCode V2. It solves the critical problems of multi-agent coordination—race conditions, hallucinated session IDs, silent task drops, and corrupted workspaces:
+## Install
 
-- **Two-Level Hierarchy (`worker_session` → `subagent`):** The orchestrator spawns root worker sessions via HTTP API, and each worker coordinates at least two distinct, pre-authorized child subagents using the native `subagent` tool.
-- **Canonical YAML Ledger (Schema Version 3):** Maintains a tamper-proof state ledger tracking session IDs, parent relationships, execution outcomes, timestamps, and verifiable criteria.
-- **Strict Write-Budget & Scope Isolation:** Enforces mathematical disjointness between parallel subagent scopes (`scope_escritura`). Siblings with overlapping scopes are serialized via DAG dependencies to eliminate race conditions.
-- **Non-Negotiable Hard Rules (R1–R14):** Formal guardrails prohibiting unverified successes, speculative API endpoints, hallucinated IDs, and destructive operations without explicit human confirmation.
-- **Bounded Result Reading & Reconciliation:** Replaces unbounded polling with bounded polling windows, idle marker checks (`time.idle`), and active detection of interactive permission blocks (`awaiting-approval`).
-- **Zero-Dependency POSIX Validators:** Includes `validate_dag.sh` and `validate_ledger_closed.sh` written in pure POSIX `sh` + `awk` to validate DAG integrity, scopes, and closing criteria without external runtimes (no Python, no yq).
-- **Graceful Degradation Support (`--allow-degraded`):** Formally validates and audits runs that reach legitimate terminal degraded states (`partial`, `blocked`, `failed`) requiring documented root causes.
-- **Direct HTTP Authentication & TUI Tabs Integration:** Safely resolves runtime credentials (HTTP Basic Auth via `service.json`) and handles local TUI tab visibility without compromising security.
-
----
-
-## 📦 Installation
-
-When installing the skill into an agent framework, the folder **must be named `opencode-orchestrator-skill`** (matching the frontmatter `name` attribute):
-
-### Option 1: Install into Agent Skills Directory
+The folder name must equal the skill `name` (`herdr-orchestrator`).
 
 ```bash
-# For Antigravity, OpenCode, Claude Code, or Cursor agents
-cd ~/.agents/skills/   # or ~/.gemini/config/skills/ or ~/.config/opencode/skills/
-git clone https://github.com/DragonJAR/OpenCode-Orchestrator-Skill.git opencode-orchestrator-skill
+git clone https://github.com/sabas1080/OpenCode-Orchestrator-Skill.git ~/.claude/skills/herdr-orchestrator-src
+ln -s ~/.claude/skills/herdr-orchestrator-src/SKILL ~/.claude/skills/herdr-orchestrator   # or copy SKILL/ there
 ```
 
-### Option 2: Clone for Workspace or Development
+## Requirements
 
-```bash
-git clone https://github.com/DragonJAR/OpenCode-Orchestrator-Skill.git
-cd OpenCode-Orchestrator-Skill
+| Requirement | Version |
+| --- | --- |
+| herdr | >= 0.8.2 (run inside a herdr pane, `HERDR_ENV=1`) |
+| jq | any recent |
+| POSIX `sh` + `awk` | for `orch.sh` and the validators |
+| git | for the optional `--worktree` mode |
+
+## Quick start
+
+```sh
+sh SKILL/scripts/orch.sh preflight                                   # gate=ready ?
+sh SKILL/scripts/orch.sh init-run --run-id 20261006-docs --worker claude --worker codex
+sh SKILL/scripts/orch.sh task add --id W1 --worker 1 --scope docs/a --criterion "docs/a/README.md documents every public function of a/"
+sh SKILL/scripts/orch.sh task add --id W2 --worker 2 --scope docs/b --criterion "docs/b/README.md documents every public function of b/"
+sh SKILL/scripts/orch.sh dispatch --task W1 --prompt-file /tmp/w1.md
+sh SKILL/scripts/orch.sh dispatch --task W2 --prompt-file /tmp/w2.md
+sh SKILL/scripts/orch.sh wait --task W1 && sh SKILL/scripts/orch.sh verify --task W1
+sh SKILL/scripts/orch.sh wait --task W2 && sh SKILL/scripts/orch.sh verify --task W2
+sh SKILL/scripts/orch.sh close                                       # TOTAL: N passed, 0 failed
 ```
 
----
+Other subcommands: `pool`, `task set`, `reconcile` (resolves `launching` / `outcome-unknown` tasks), `suggest-count FILE` and `teardown` (dry run; `--confirm` closes only this run's worker panes).
 
-## ⚙️ Prerequisites & Environment
+### Worker permission mode (`--agent-arg`)
 
-The skill and its validation suite are intentionally designed with **zero runtime dependencies** beyond standard POSIX system utilities:
+`init-run --agent-arg ARG` (repeatable, one value per flag) is passed after `--` to `herdr agent start`. For example, to start Claude workers in auto permission mode:
 
-| Tool | Required Version | Purpose |
-|------|-------------------|---------|
-| **POSIX `sh`** | Standard (`/bin/sh`) | Test execution and DAG validation runner |
-| **`awk`** | Standard POSIX awk (nawk, gawk, mawk) | Ledger parsing, lexical scope validation, closed-gate logic |
-| **OpenCode** | Series 2.0.x (V2 snapshot) | Target runtime for sessions and native subagent dispatch |
-| **Git** | 2.0+ | Repository checkout with LF line-ending enforcement |
-
-### Environment Verification
-
-Run the built-in structural validator from the repository root:
-
-```bash
-bash .agents/maintenance/scripts/validate_skill.sh
+```sh
+sh SKILL/scripts/orch.sh init-run --run-id 20261006-docs --worker claude --worker claude \
+  --agent-arg --permission-mode --agent-arg auto
 ```
 
-Expected output:
-```text
-[OK]   SKILL.md existe y es UTF-8 legible
-[OK]   Frontmatter válido dentro del subconjunto YAML documentado; claves únicas
-[OK]   Campo name válido (opencode-orchestrator-skill)
-[OK]   Campo description decodificado presente y <= 1024 caracteres (679)
-[OK]   SKILL.md <= 5000 palabras (3161)
-[OK]   references/ existe con archivos Markdown (13)
-[OK]   Análisis Markdown completo: 44 enlaces inline encontrados (44 locales, 0 externos)
-----------------------------------------
-TOTAL: 7 passed, 0 failed
-```
+Use it only for unattended workers the user actually wants. Without it, workers start in your default permission mode and stop at approval prompts, which the orchestrator reports and never answers.
 
-> **Windows Environments:** Run validators and the orchestration scripts (`orchestrate-windows.sh`) inside **Git Bash** or **WSL** — never from `cmd.exe` directly (a `sh` must be on PATH). All `.sh` scripts must retain **LF** line endings; the repository enforces this automatically via `.gitattributes` (`*.sh text eol=lf`). For `attach-tabs` on Git Bash, a python3 with `fcntl` (MSYS2 python) is required; the script fails closed with instructions if absent.
+### Folder trust
 
----
+A fresh folder or worktree makes Claude show its folder-trust dialog. `init-run` then prints `INCOMPLETE`; answer the dialog once yourself in that pane and rerun `init-run` with the same `--run-id`. The orchestrator never answers it.
 
-## 🧩 Architecture & Hierarchy
-
-OpenCode multi-agent orchestration operates strictly in two tiers:
-
-```text
- ┌───────────────────────────────────────────────────────────────┐
- │                   ORCHESTRATOR (Root Agent)                   │
- │  - Owns and maintains canonical YAML ledger (schema_version 3) │
- │  - Dispatches root worker sessions (parentID: null)           │
- │  - Pre-authorizes task rows, write budgets, and criteria      │
- │  - Polls, reconciles, verifies evidence, and closes ledger   │
- └───────────────────────────────┬───────────────────────────────┘
-                                 │ HTTP POST /api/session (directory)
-                                 ▼
- ┌───────────────────────────────────────────────────────────────┐
- │                 WORKER SESSION (Root Worker)                  │
- │  - Native session with parentID: null                         │
- │  - Receives explicit write budget and pre-authorized tasks    │
- │  - Coordinates at least 2 distinct child subagents            │
- │  - NEVER writes or edits the shared ledger                    │
- │  - Inspects deliverables, integrates findings, reports YAML   │
- └───────────────────────────────┬───────────────────────────────┘
-                                 │ Native subagent tool call
-                ┌────────────────┴────────────────┐
-                ▼                                 ▼
- ┌─────────────────────────────┐   ┌─────────────────────────────┐
- │    SUBAGENT CHILD (S1)      │   │    SUBAGENT CHILD (S2)      │
- │ - parentID: workerSessionID │   │ - parentID: workerSessionID │
- │ - Scope: artifacts/s1/      │   │ - Scope: artifacts/s2/      │
- │ - Generates S1-output.md    │   │ - Generates S2-output.md    │
- │ - Writes S1-evidence.yml    │   │ - Writes S2-evidence.yml    │
- └─────────────────────────────┘   └─────────────────────────────┘
-```
-
-### Write Budget & Scope Isolation Rules
-
-1. **Disjoint Subsets:** Every child's `scope_escritura` must be an explicit subset of the parent worker's write budget.
-2. **No Overlapping Concurrent Writes:** Sibling subagents or workers with overlapping paths are automatically serialized using DAG dependencies (`dependencias: ["S1"]`).
-3. **Parent Silence:** A parent worker must never write to a child's scope while that child is active or in an uncertain state.
-4. **Timeouts Do Not Free Scopes:** If an execution times out or loses connection, its write scope remains locked until the session outcome is formally reconciled.
-
----
-
-## 🚀 8-Step Operational Workflow (Playbook)
-
-The skill follows an 8-step lifecycle mapped from `SKILL.md` and detailed in [`SKILL/references/playbook.md`](SKILL/references/playbook.md):
-
-1. **Detect Intent & Scope:** Identify goals, deliverables, and assign isolated directory scopes.
-2. **Preflight Real Capabilities:** Query `GET /api/info`, `GET /api/location`, and `/openapi.json` to verify actual available HTTP endpoints and tool schemas before dispatching.
-3. **Verify Access & Identity:** Confirm authorization and project directory. If unauthorized, stop and report the missing permissions (Degraded Mode A).
-4. **Draft Ledger & Pre-Authorize Children:** Write the initial Schema 3 YAML ledger with tasks in `pending` state, pre-authorizing at least two subagent tasks per worker.
-5. **Dispatch Root Worker Session:** Create the worker via `POST /api/session` with explicit `location.directory`. Verify `parentID: null` and send the structured prompt template.
-6. **Coordinate Subagents:** The worker launches child sessions via the native `subagent` tool. Each daughter inherits or verifies the canonical location.
-7. **Monitor & Reconcile:** The orchestrator polls with bounded intervals (`GET /api/session/{id}`). Checks for pending permission requests (`GET /api/session/{id}/permission`) and re-arms timers only if active.
-8. **Inspect, Verify & Close:** The orchestrator inspects deliverables, verifies evidence files (`criterion`, `result: "pass"`, `observed`), integrates findings, and executes POSIX validators before closing.
-
----
-
-## 🔍 Validation Suite
-
-The repository includes standalone, high-performance POSIX shell validators:
-
-### 1. In-Flight DAG & Ledger Validation (`validate_dag.sh`)
-
-Validates canonical YAML syntax, task IDs, parent relationships, absence of dependency cycles, non-overlapping concurrent scopes, and timestamp coherence:
-
-```bash
-sh SKILL/scripts/validate_dag.sh path/to/ledger.yml
-```
-
-### 2. Strict Closing Validation (`validate_ledger_closed.sh`)
-
-Enforces that every task has completed successfully with `estado: verified`, `execution_outcome: succeeded`, matching `output_path`, and valid `evidence_refs`:
-
-```bash
-sh SKILL/scripts/validate_ledger_closed.sh --require-evidence path/to/ledger.yml
-```
-
-### 3. Degraded Run Closing Validation (`--allow-degraded`)
-
-When a multi-agent run encounters legitimate external barriers, permission denials, or incomplete tasks, it must close in an audited terminal state (`partial`, `blocked`, `failed`):
-
-```bash
-sh SKILL/scripts/validate_ledger_closed.sh --allow-degraded path/to/ledger.yml
-```
-
-`--allow-degraded` verifies that:
-- No task remains in an active or floating state (`pending`, `launching`, `running`, `awaiting-approval`, `outcome-unknown`).
-- Every non-verified terminal task contains non-empty `notas` documenting the technical cause.
-- Any task marked `verified` strictly adheres to full evidence and outcome checks.
-
----
-
-## 📁 Repository Structure
-
-```text
-OpenCode-Orchestrator-Skill/
-├── .gitattributes                  # Enforces LF line endings for all shell scripts
-├── .gitignore                      # Strict whitelist preventing local leaks
-├── README.md                       # Comprehensive English guide
-├── README.es.md                    # Comprehensive Spanish guide
-└── SKILL/                          # Core skill distribution package
-    ├── LICENSE                     # MIT License
-    ├── SKILL.md                    # Main skill specification, R1-R14, decision gates
-    ├── references/                 # Detailed operational references
-    │   ├── agent-patterns.md       # Worker-to-subagent breakdown & dispatch cards
-    │   ├── agents-and-safety.md    # Agent catalog, permissions & write budgets
-    │   ├── api-and-sessions.md     # HTTP API reference, polling & reconciliation
-    │   ├── decision-trees.md       # Decision trees for preflight, forks, closing
-    │   ├── failure-matrix.md       # Observable failure modes, actions & anti-patterns
-    │   ├── ledger-template.md      # Canonical YAML schema, gates & evidence format
-    │   ├── opencode-patterns.md    # Master index of operational mechanisms
-    │   ├── playbook.md             # 8-step operational workflow & closing checklist
-    │   ├── prompt-templates.md     # Standardized prompt templates (1 to 5)
-    │   ├── recipe-tui-tabs.md      # Direct HTTP auth & local TUI tabs recipe
-    │   ├── research-evidence.md    # Upstream source tracking, versions & audit trail
-    │   ├── subagent-contract.md    # Native subagent tool contract & location rules
-    │   ├── naming-convention.md    # `[NN] Name` session title pattern
-    │   └── trigger-tests.md        # Test suite for activation & false-positive defense
-    └── scripts/                    # Zero-dependency POSIX shell validators + orchestrator
-        ├── orchestrate.sh           # Multi-OS swiss-army knife (12 subcommands)
-        ├── orchestrate-{darwin,linux,wsl,windows}.sh  # Explicit OS dispatch wrappers
-        ├── preflight.sh             # Endpoint + tabs gate discovery (caches state)
-        ├── watch_run.sh             # Bounded POSIX+awk watcher (idle + artifacts)
-        ├── dragon_name.sh           # Catalog of 100 dragon names + deterministic synthesis
-
-        ├── validate_dag.sh         # In-flight DAG, syntax & scope validator
-        └── validate_ledger_closed.sh # Final closing gate validator (--allow-degraded)
-        └── os/                      # OS adapters: lock + path normalization
-            ├── _common.sh        # Shared helpers (auth, cache, json, pool, tabs)
-            ├── darwin.sh         # macOS: python3 fcntl
-            ├── linux.sh          # Linux: flock(1)
-            ├── wsl.sh            # WSL: flock(1), drvfs fail-closed
-            ├── windows-gbash.sh  # Git Bash: python3 fcntl with MSYS2 probe
-            └── tui-detect.sh     # Active TUI / tabs gate detector (read-only)
+## Architecture
 
 ```
-
----
-
-## 🎓 Trigger Phrases
-
-The skill is designed to activate on clear multi-agent orchestration intent and remain inactive for single-agent or general requests:
-
-### Activates On:
-- *"Orchestrate multiple OpenCode sessions: spawn two workers and have each run at least two subagents to audit auth and billing."*
-- *"Delegate a large migration in OpenCode: manage sessions, partition write scopes without overlap, and verify worker outcomes."*
-- *"Spawn workers and subagents in my OpenCode server, track them in a YAML ledger, and validate the DAG before closing."*
-- *"Orquesta varias sesiones de OpenCode y valida el ledger al terminar."*
-- *"Lanza workers y subagents en OpenCode con scopes de escritura separados."*
-
-### Does NOT Activate On:
-- *"Explain what an AI agent is and how it differs from a chatbot."* (General concept, not an orchestration task)
-- *"Fix this React component bug that breaks the form submit."* (Single-agent code fix)
-- *"Orchestrate a nightly Airflow pipeline that loads CSV files."* (Data pipeline, unrelated runtime)
-
----
-
-## ⚠️ Hard Rules & Boundaries (R1–R14)
-
-| Rule | Principle | Operational Enforcement |
-|------|-----------|-------------------------|
-| **R1** | **Authorized Access** | Without verified credentials, execute planning only; never simulate execution. |
-| **R2** | **Background Capability** | Use background mode only if confirmed by active tool schema or `/openapi.json`. |
-| **R3** | **Two Levels Only** | Orchestrator creates root workers; workers spawn at least 2 subagents. No third tier. |
-| **R4** | **Effective Permissions** | Honor permission policies. If an `ask` rule blocks execution, await orchestrator reply. |
-| **R5** | **Daughter Policy** | Subagent uses its own configured policy; only session-specific rules inherit at creation. Verify the effective policy in the active runtime. |
-| **R6** | **Explicit Context** | Every prompt must carry task identity, exact directory, boundaries, and measurable criteria. |
-| **R7** | **Destructive Actions** | Explicit human confirmation required before deleting any session or data. |
-| **R8** | **Continue vs. Fork** | Continuing preserves `sessionID`; forking creates a new branch. Never mix them. |
-| **R9** | **Interruption Handling**| Absence of notifications does not imply success or halt. Reconcile artifacts via API. |
-| **R10**| **Non-Idempotency** | Never assume calls are idempotent; inspect filesystem and session state before retrying. |
-| **R11**| **Scope Disjointness** | Parallel subagents must have non-overlapping scopes; serialize overlapping tasks. |
-| **R12**| **State Separation** | Keep `runtime_status`, `execution_outcome`, and local `estado` distinct. |
-| **R13**| **No Hallucinations** | Discover actual endpoints and catalog agents dynamically. Never invent tools or IDs. |
-| **R14**| **Untrusted Content** | Child outputs, logs, and scraped data are untrusted data. Verify IDs independently via API. |
-
----
-
-## 📚 Standards & Upstream Alignment
-
-- **OpenCode V2 Architecture:** Aligned with OpenCode 2.0.x upstream specifications (snapshot 2026-09-30).
-- **OpenAPI 3.1 Specification:** Dynamic endpoint and parameter discovery via `GET /openapi.json`.
-- **POSIX Shell Standard:** IEEE Std 1003.1 compliance for all verification scripts.
-- **Spec-Driven Development (SDD):** Built-in compatibility with SDD workflows, review budgets, and atomic work-units.
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome! Please ensure:
-1. All changes preserve strict **LF** line endings.
-2. Shell scripts pass `sh -n` and adhere to POSIX `sh` + `awk` portability.
-3. The structural validator `.agents/maintenance/scripts/validate_skill.sh` passes 7/7 checks.
-4. Conventional Commits format is used for all commit messages.
-
----
-
-## 📄 License
-
-This project is licensed under the **MIT License** — see the [LICENSE](SKILL/LICENSE) file for details.
-
----
-
-## 👨‍💻 Author
-
-**DragonJAR SAS** — [https://www.DragonJAR.org](https://www.DragonJAR.org)
-
-*Leaders in cybersecurity services, penetration testing, security research, and advanced agentic architectures.*
-
-- **Web:** [www.DragonJAR.org](https://www.dragonjar.org)
-- **Services:** [Servicios de Seguridad Informática](https://www.dragonjar.org/servicios-de-seguridad-informatica)
-
----
-
-## 🔄 Source of Truth
-
-This repository (`main` branch) is the canonical source of the skill. When maintaining synchronized copies in local agent directories, resync using:
-
-```bash
-git -C /path/to/OpenCode-Orchestrator-Skill pull
-rsync -av --delete --exclude '.git' --exclude '.agents' --exclude 'reports' \
-  /path/to/OpenCode-Orchestrator-Skill/SKILL/ ~/.agents/skills/opencode-orchestrator-skill/
+orchestrator pane (Claude)
+        |
+        v
+  orch.sh  --->  herdr CLI  --->  worker panes (claude | codex | opencode ...)
+        |
+        v
+.herdr-orch/<run>/
+    ledger.yaml          schema 4, written only by orch.sh
+    workers.tsv          worker registry (identity)
+    <task>/prompt.md     composed task file
+    <task>/report.md     short worker report
+    <task>/evidence.yml  criterion, result, observed
 ```
+
+## Live acceptance
+
+Run against a real herdr 0.8.2 with 2 `claude` workers (permission mode `auto`): both tasks completed and verified, `close` printed `TOTAL: 4 passed, 0 failed`, and `teardown --confirm` closed exactly the two worker panes. Two earlier attempts stopped where the rules require (trust dialog, approval prompt). Details: [docs/superpowers/acceptance/2026-10-06-e2e.md](docs/superpowers/acceptance/2026-10-06-e2e.md).
+
+## Tests
+
+```sh
+sh tests/run_validators.sh   # validators
+sh tests/run_orch.sh         # orch.sh against a fake herdr
+sh tests/check_skill.sh      # skill structure and links
+```
+
+## Origin
+
+Fork of DragonJAR's [OpenCode-Orchestrator-Skill](https://github.com/DragonJAR/OpenCode-Orchestrator-Skill) 1.0.0, rebuilt for herdr by Electronic Cats. The OpenCode version is preserved at tag `opencode-final`.
+
+## License
+
+MIT, see [SKILL/LICENSE](SKILL/LICENSE).

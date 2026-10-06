@@ -4,6 +4,23 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## herdr-orchestrator 0.1.0 — 2026-10-06
+
+Fork of OpenCode-Orchestrator-Skill 1.0.0 (preserved at tag `opencode-final`), rebuilt for herdr.
+
+### Added
+- `scripts/orch.sh` (preflight, init-run, pool, task add/set, dispatch, wait, reconcile, verify, suggest-count, close, teardown) on the herdr CLI + jq.
+- `init-run --agent-arg ARG` (repeatable) passes native agent args after `--` to `herdr agent start`, e.g. `--permission-mode auto` for unattended Claude workers.
+- `reconcile --task`, including tasks left in `launching`: resolves uncertain dispatches from the worker's real state without resending prompts.
+- `suggest-count FILE` advises 1-3 workers (works outside herdr).
+- `teardown` (dry run; `--confirm` closes only the run's worker panes, `--remove-worktrees` for worktree runs).
+- Ledger schema 4 (herdr identity, worktree-aware canonical scopes, explicit state machine) and `check_evidence.sh`.
+- Test suites: `tests/run_validators.sh`, `tests/run_orch.sh` (fake herdr), `tests/check_skill.sh`.
+- Live acceptance run on herdr 0.8.2 with 2 claude workers: `TOTAL: 4 passed, 0 failed` (`docs/superpowers/acceptance/2026-10-06-e2e.md`).
+
+### Removed
+- OpenCode HTTP/session plumbing, TUI tabs recipe, per-OS adapters, Windows path handling, the two-subagent minimum.
+
 ## [1.0.0] - 2026-10-03
 
 First public release of the OpenCode V2 two-level orchestration skill.
