@@ -3,14 +3,14 @@
 ## Choosing worker kinds
 
 - `claude` is the default for implementation. `codex` and `opencode` are alternatives or reviewers; any kind listed by `herdr agent` is accepted (`preflight` prints `kinds=`; `init-run` rejects an unknown kind).
-- Kinds without a herdr integration may report status `unknown`; `orch.sh` then cannot tell idle from working and tasks can end `outcome-unknown`. Prefer another kind, or continue and mark the run degraded (mode B). `herdr integration status` is the human-readable check; `orch.sh` does not parse it.
+- Kinds without a herdr integration may report status `unknown`; `orch.sh` then cannot tell idle from working and refuses to dispatch to a worker whose status is unknown. Switch kind or install the integration (mode B). `herdr integration status` is the human-readable check; `orch.sh` does not parse it.
 - Mixing kinds is fine: one `--worker KIND[:Title]` per worker.
 
 ## Write budget and scopes
 
 - Every task declares its write scope. Canonical scopes of tasks that can run concurrently must be disjoint, or serialized with `--deps` (H5). A timeout never releases a scope.
 - Each task's scope also holds its own `.herdr-orch/<run>/<task>` directory (report and evidence). Relative scopes resolve against the task's directory; every scope is canonicalised before comparison, so tasks in different worktrees never conflict.
-- A `cancelled` task is excluded from the overlap check and needs `notas` saying what was reconciled; that is how a failed or stuck task is reassigned to another worker under a new task ID (Degraded D).
+- Terminal non-verified tasks (`blocked`, `failed`, `partial`, `interrupted`, `cancelled`) release their scope: they are excluded from the overlap check and need `notas` saying what was reconciled; that is how a failed or stuck task is reassigned to another worker under a new task ID (Degraded D). Ask the user to stop the worker first if it may still be writing.
 - Workers write only inside their scope plus report and evidence and never touch the ledger (H13).
 
 ## Worktrees

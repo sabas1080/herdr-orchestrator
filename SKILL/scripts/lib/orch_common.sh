@@ -14,7 +14,7 @@ need_env() {
 
 # yaml_q STR -> double-quoted YAML scalar; \ and " escaped; newlines/tabs -> spaces
 yaml_q() {
-  printf '"%s"' "$(printf '%s' "$1" | LC_ALL=C tr '\000-\037\177' ' ' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
+  printf '"%s"' "$(printf '%s' "$1" | LC_ALL=C tr '\000-\037\177' '[ *]' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')"
 }
 # yaml_list CSV -> flow list of quoted items; "" -> []
 yaml_list() {

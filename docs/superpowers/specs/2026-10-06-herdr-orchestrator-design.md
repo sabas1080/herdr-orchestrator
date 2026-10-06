@@ -181,7 +181,7 @@ tasks:
 2. `task_id` unique; `agent_name` format valid.
 3. At most one task in an active state per `agent_name`.
 4. `dependencias` reference existing tasks; the DAG is acyclic; a task in an active or post-active state (`launching` onward) has all dependencies `verified`.
-5. **Scopes:** canonical scopes (per §4) of two tasks must not overlap unless one transitively depends on the other. Tasks in `cancelled` state are excluded from the overlap check and must have non-empty `notas` (effects reconciled) — this is what makes reassignment possible (Degraded D).
+5. **Scopes:** canonical scopes (per §4) of two tasks must not overlap unless one transitively depends on the other. Tasks in a terminal non-verified state (`blocked`, `failed`, `partial`, `interrupted`, `cancelled`) are excluded from the overlap check and must have non-empty `notas` (effects reconciled) — this is what makes reassignment possible (Degraded D); they release their scope, so ask the user to stop the worker first if it may still be writing.
 6. `output_path` and every `evidence_refs` entry are absolute and under `RUN_DIR/<task_id>/`, and fall inside some `scope_escritura` entry of the task.
 7. `directory` consistency with `worktree` and `run.workspace.directory`.
 8. `run.workspace.directory` equals `pwd -P`.
@@ -241,7 +241,7 @@ POSIX `sh`. Preconditions checked on every subcommand: `HERDR_ENV=1`, `herdr` an
 7. `orch.sh verify` — the orchestrator reads only `report.md`.
 8. `orch.sh close` and deliver the output contract: global state (normal/degraded), run identity, per-task state and evidence, validation `TOTAL`, blockers and unknowns.
 
-**Degraded modes.** A — no herdr: plan + draft ledger (all `pending`, not validated). B — kind without integration / `unknown` status: switch kind or continue marked degraded. C — no evidence produced: `task set --estado partial`. D — stuck or failed worker: `task set --estado cancelled --notas "<effects reconciled>"`, then `task add` a **new** task (new `task_id`) on another worker with the same scope; the cancelled task is excluded from the overlap check.
+**Degraded modes.** A — no herdr: plan + draft ledger (all `pending`, not validated). B — kind without integration / `unknown` status: `orch.sh` refuses to dispatch to a worker whose status is unknown; switch kind or install the integration. C — no evidence produced: `task set --estado partial`. D — stuck or failed worker: ask the user to interrupt that worker in its pane (`orch.sh` never sends keys), then `task set --estado cancelled --notas "<effects reconciled>"`, then `task add` a **new** task (new `task_id`) on another worker with the same scope; the terminal task is excluded from the overlap check.
 
 ## 9. Error handling — failure matrix (herdr)
 
@@ -255,7 +255,7 @@ POSIX `sh`. Preconditions checked on every subcommand: `HERDR_ENV=1`, `herdr` an
 | Name collision | live agent with the same name outside this run | Fail closed; choose another title or run id | Rename the foreign agent |
 | Pane moved | recorded `pane_id` gone, agent name live | `init-run` reuse and `teardown` refresh `workers.tsv` by agent name; the ledger's `pane_id` is informational and may be stale (dispatch/wait messages may show the old id) | Use the old pane ID |
 | Pane closed externally | `agent_not_found` / `pool` shows `gone` | Active task → `interrupted`; ask before recreating | Assume the work finished |
-| Evidence gate fails | `verify` prints `[FAIL]` | Keep `completed`; ask the worker (continuation prompt) for the missing evidence | Write the evidence yourself |
+| Evidence gate fails | `verify` prints `[FAIL]` | Keep `completed`; ask the worker (continuation prompt via `herdr agent prompt … --wait`, then `verify`) for the missing evidence | Write the evidence yourself |
 | Incomplete init | `INCOMPLETE`, exit 1 | Rerun `init-run` with the same `--run-id` | Create workers by hand |
 | Version skew | `herdr status --json` `.server.compatible == false` | Stop; report | Upgrade or restart the server |
 | Lock contention | lock not acquired within timeout | Retry later; report | Delete the lock while another `orch.sh` runs |

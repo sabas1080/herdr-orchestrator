@@ -30,7 +30,7 @@ orch.sh init-run --run-id 20261006-docs --worker claude --worker codex:"Doc Writ
 
 One `--worker KIND[:Title]` per worker (titles may contain spaces; quote them). Optional: `--worktree` only if the user asked; `--agent-arg ARG` (repeatable) passes native arguments to every worker after `--`, e.g. `--agent-arg --permission-mode --agent-arg auto`, only when the user wants unattended Claude workers. See [agents-and-safety.md](agents-and-safety.md).
 
-Output per worker: `started  [01] Vermithrax -> w01-vermithrax-xxxx (claude, w1:p2)` (or `reused …`), then `run <id> ready: <dir>`. Exit `0` ready; `1` with `INCOMPLETE: N worker(s) failed` and one `FAILED` line per failure (typically a dialog waiting in a pane: ask the user to answer it, then rerun with the same `--run-id` and the same `--worker` flags); `2` usage, unknown kind or a worker count/title mismatch on rerun. A name collision with a live agent outside the run fails (exit 1) before anything is created.
+Output per worker: `started  [01] Vermithrax -> w01-vermithrax-xxxx (claude, w1:p2)` (or `reused …`), then `run <id> ready: <dir>`. Exit `0` ready; `1` with `INCOMPLETE: N worker(s) failed` and one `FAILED` line per failure (typically a dialog waiting in a pane: ask the user to answer it, then rerun `init-run --run-id ID` with the same `--worker` and `--agent-arg` flags); `2` usage, unknown kind or a worker count/title mismatch on rerun. A name collision with a live agent outside the run fails (exit 1) before anything is created.
 
 New folders and new worktrees trigger Claude's folder-trust dialog. The user answers it once; you never do (H8).
 
@@ -80,7 +80,7 @@ Needs the task `running` or `awaiting-approval`. Slices of 60 s, no raw output.
 | `0` | `wait: W1 completed (idle|done)` | `verify` |
 | `1` | agent gone (task `interrupted`), or herdr failed 3 consecutive slices (`herdr error (<code>); estado unchanged`) | gone: ask the user before recreating; herdr error: `preflight`, then retry `wait` |
 | `3` | timeout, task `outcome-unknown` | `reconcile --task W1` |
-| `4` | stuck: no output change for N s (default 1800) while `working`; `estado` unchanged | keep waiting, or Degraded D |
+| `4` | stuck: no output change for N s (default 1800) while `working`; `estado` unchanged | keep waiting, or Degraded D (ask the user to interrupt that worker in its pane first) |
 | `5` | worker `blocked`, task `awaiting-approval`, notification sound `request` | tell the user which pane needs approval, then `wait` again |
 
 `reconcile --task W1` re-reads the worker and moves the task from `launching`, `outcome-unknown`, `running` or `awaiting-approval` according to what actually happened: `running`, `awaiting-approval` (exit 5), `completed`, `interrupted`, or back to `pending` only when the prompt provably never arrived (see the delivery rule in [ledger-template.md](ledger-template.md)). Exit `3` leaves the task unchanged (pane read failed, odd status, or a transition not allowed).

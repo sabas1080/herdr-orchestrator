@@ -215,7 +215,7 @@ EOF
 $_ir_plan
 EOF
   if [ "$_ir_failed" -gt 0 ]; then
-    printf 'INCOMPLETE: %d worker(s) failed; rerun init-run --run-id %s with the same --worker flags\n' "$_ir_failed" "$RUN_ID"
+    printf 'INCOMPLETE: %d worker(s) failed; rerun init-run --run-id %s with the same --worker and --agent-arg flags\n' "$_ir_failed" "$RUN_ID"
     exit 1
   fi
   printf 'run %s ready: %s\n' "$RUN_ID" "$RUN_DIR"
@@ -287,7 +287,7 @@ sub_task_add() {
   _ta_now=$(now_utc)
   lock_acquire
   cp "$LEDGER" "$LEDGER.bak"
-  ledger_append_task \
+  if ! ledger_append_task \
     "task_id=$(yaml_q "$_ta_id")" \
     "agent_name=$(yaml_q "$_ta_name")" \
     "title=$(yaml_q "[$(printf '%02d' "$_ta_ord")] $(workers_field "$_ta_name" title)")" \
@@ -301,7 +301,11 @@ sub_task_add() {
     "output_path=$(yaml_q "$_ta_dir/report.md")" \
     "evidence_refs=$(yaml_list "$_ta_dir/evidence.yml")" \
     'estado="pending"' 'runtime_status=null' 'execution_outcome="unknown"' \
-    "created_at=$(yaml_q "$_ta_now")" "last_state_at=$(yaml_q "$_ta_now")" 'notas=""'
+    "created_at=$(yaml_q "$_ta_now")" "last_state_at=$(yaml_q "$_ta_now")" 'notas=""'; then
+    mv "$LEDGER.bak" "$LEDGER"; lock_release
+    rmdir "$_ta_dir" 2>/dev/null
+    die "task $_ta_id could not be appended (ledger unchanged)"
+  fi
   if _ta_out=$(cd "$WS" && sh "$SKILL_SCRIPTS/validate_dag.sh" "$LEDGER"); then
     rm -f "$LEDGER.bak"; lock_release
     printf 'task %s added -> %s\n' "$_ta_id" "$_ta_name"
@@ -372,6 +376,7 @@ sub_dispatch() {
     esac
     shift 2
   done
+  [ -z "$_dp_to" ] || [ "$_dp_wait" -eq 1 ] || usage_die "dispatch: --timeout requires --wait"
   case "$_dp_to" in *[!0-9]*|???????????*) usage_die "dispatch: --timeout must be a number of milliseconds (at most 10 digits)" ;; esac
   [ -n "$_dp_t" ] && [ -f "$_dp_pf" ] || usage_die "dispatch: --task and an existing --prompt-file are required"
   require_run "$_dp_run"
@@ -388,7 +393,11 @@ EOF
   _dp_other=$(active_task_of "$_dp_name" "$_dp_t")
   [ -z "$_dp_other" ] || die "dispatch: worker $_dp_name already runs task $_dp_other"
   _dp_st=$(agent_status "$_dp_name")
-  case "$_dp_st" in idle|done) ;; *) die "dispatch: worker $_dp_name is $_dp_st (needs idle or done)" ;; esac
+  case "$_dp_st" in
+    idle|done) ;;
+    unknown) die "dispatch: worker $_dp_name status is unknown (no herdr integration for this kind? check \`herdr integration status\`, or use another kind)" ;;
+    *) die "dispatch: worker $_dp_name is $_dp_st (needs idle or done)" ;;
+  esac
   [ -r "$_dp_pf" ] || die "dispatch: cannot read --prompt-file $_dp_pf"
   [ -r "$SKILL_SCRIPTS/prompt-templates/task-header.md" ] || die "dispatch: task-header.md template is missing or unreadable"
   mkdir -p "$RUN_DIR/$_dp_t"
@@ -498,7 +507,12 @@ sub_wait() {
       *)
         _wt_fails=$((_wt_fails + 1))
         if [ "$_wt_fails" -ge 3 ]; then
-          printf 'wait: %s herdr error (%s); estado unchanged\n' "$_wt_t" "${_wt_st#error:}"; exit 1
+          if [ "$_wt_st" = unknown ]; then
+            printf 'wait: %s status unknown (no herdr integration for this kind?); estado unchanged\n' "$_wt_t"
+          else
+            printf 'wait: %s herdr error (%s); estado unchanged\n' "$_wt_t" "${_wt_st#error:}"
+          fi
+          exit 1
         fi
         sleep 1 ;;
     esac

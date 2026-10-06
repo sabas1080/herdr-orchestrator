@@ -659,6 +659,32 @@ new_case fix10-stdin
 check fix10-stdin-init 0 "ready" orch init-run --run-id s1 --worker claude --worker claude
 check fix10-stdin-two-starts 0 "" sh -c "[ \$(grep -c '^agent start' '$FAKE_HERDR_DIR/calls.log') -eq 2 ]"
 
+# ---- Final-review fix wave ------------------------------------------------
+running_task ff1-release
+resp agent_wait '' 1 "$(herr agent_not_found)"
+orch wait --task W1 >/dev/null 2>&1
+check ff1-interrupted 0 "interrupted" st W1
+check ff1-scope-released 0 "task W3 added" orch task add --id W3 --worker 2 --criterion c --scope docs/a
+
+setup_run ff2-dispatch-unknown
+orch task add --id W1 --worker 1 --criterion c --scope docs/a >/dev/null
+resp agent_get "$(agent_json "$N1" unknown)"
+check ff2-dispatch-unknown 1 "status is unknown (no herdr integration for this kind? check \`herdr integration status\`, or use another kind)" orch dispatch --task W1 --prompt-file "$WS/task.md"
+
+running_task ff2-wait-unknown
+resp agent_get "$(agent_json "$N1" unknown)"
+resp agent_wait '' 1 "$(herr timeout)"
+check ff2-wait-unknown 1 "status unknown (no herdr integration for this kind?)" orch wait --task W1
+check ff2-wait-unknown-state 0 "running" st W1
+
+new_case ff4-incomplete
+resp agent_start.1 '' 1 "$(herr agent_not_ready)"
+check ff4-incomplete-hint 1 "same --worker and --agent-arg flags" orch init-run --run-id t9 --worker claude
+
+setup_run ff5-timeout
+orch task add --id W1 --worker 1 --criterion c --scope docs/a >/dev/null
+check ff5-dispatch-timeout-nowait 2 "--timeout requires --wait" orch dispatch --task W1 --prompt-file "$WS/task.md" --timeout 5000
+
 # ---- orch.sh subcommand cases are appended by Tasks 4-7 --------------------
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAILS"

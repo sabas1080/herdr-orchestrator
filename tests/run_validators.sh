@@ -89,6 +89,11 @@ setf W1 estado '"cancelled"'; setf W1 execution_outcome '"cancelled"'; setf W1 n
 setf W2 scope_escritura '["docs/a", "@WS@/.herdr-orch/r1/W2"]'
 check dag-reassign-after-cancel 0 "TOTAL: " dag
 
+mk reassign-after-interrupted
+setf W1 estado '"interrupted"'; setf W1 execution_outcome '"interrupted"'; setf W1 notas '"wait: agent is gone"'
+setf W2 scope_escritura '["docs/a", "@WS@/.herdr-orch/r1/W2"]'
+check dag-reassign-after-interrupted 0 "TOTAL: " dag
+
 mk cancelled-without-notas
 setf W1 estado '"cancelled"'; setf W1 execution_outcome '"cancelled"'
 check dag-cancelled-without-notas 1 "requires non-empty notas" dag

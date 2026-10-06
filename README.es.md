@@ -62,7 +62,7 @@ sh SKILL/scripts/orch.sh init-run --run-id 20261006-docs --worker claude --worke
 
 ### Confianza de carpeta
 
-Una carpeta o worktree nuevo hace que Claude muestre su diálogo de confianza de carpeta. `init-run` imprime entonces `INCOMPLETE`; responde el diálogo tú mismo una vez en ese pane y repite `init-run` con el mismo `--run-id`. El orquestador nunca lo responde.
+Una carpeta o worktree nuevo hace que Claude muestre su diálogo de confianza de carpeta. `init-run` imprime entonces `INCOMPLETE`; responde el diálogo tú mismo una vez en ese pane y repite `init-run --run-id ID` con los mismos flags `--worker` y `--agent-arg`. El orquestador nunca lo responde.
 
 ## Arquitectura
 

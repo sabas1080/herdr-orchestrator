@@ -61,10 +61,10 @@ orchestrator's conversation: everything you need is in this file.
 Send a continuation to a worker only when `reconcile` or `verify` says something is missing (for example `verify` printed `[FAIL] W1 … report missing` or an evidence problem), and never while the task is `running`. It is short and never re-sends the task:
 
 ```sh
-herdr agent prompt <agent_name> "Task W1 follow-up: <what is missing, e.g. write the report to <output_path> and the evidence file to <evidence path> in the three-line format from your task file>. Do not change anything else." 
+herdr agent prompt <agent_name> "Task W1 follow-up: <what is missing, e.g. write the report to <output_path> and the evidence file to <evidence path> in the three-line format from your task file>. Do not change anything else." --wait --timeout 600000
 ```
 
-Take `<agent_name>` and the paths from `orch.sh pool` and the ledger. After the worker settles, run `orch.sh wait`/`reconcile` as needed and `verify` again. If the prompt send is uncertain, `reconcile` before trying again.
+Take `<agent_name>` and the paths from `orch.sh pool` and the ledger. Add `--wait --timeout 600000` so the call returns when the worker settles, then run `orch.sh verify --task ID` again (`wait` and `reconcile` reject a `completed` task, so do not use them here). If herdr reports `blocked`/`agent_blocked`, ask the user (H8). Never resend the whole task.
 
 ## 3. Final report to the user
 

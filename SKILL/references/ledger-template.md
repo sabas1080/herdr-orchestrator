@@ -108,7 +108,7 @@ Active states: `launching`, `running`, `awaiting-approval`, `outcome-unknown`. T
 2. `task_id` unique; `agent_name` format valid.
 3. At most one task in an active state per `agent_name`.
 4. `dependencias` reference existing tasks; the graph is acyclic; a task in an active or post-active state (`launching` onward) has all dependencies `verified`.
-5. Scopes: canonical scopes of two tasks must not overlap unless one transitively depends on the other. `cancelled` tasks are excluded from the overlap check and must have non-empty `notas`.
+5. Scopes: canonical scopes of two tasks must not overlap unless one transitively depends on the other. Terminal non-verified tasks (`blocked`, `failed`, `partial`, `interrupted`, `cancelled`) release their scope: they are excluded from the overlap check and must have non-empty `notas`. Ask the user to stop the worker first if it may still be writing.
 6. `output_path` and every `evidence_refs` entry are absolute, under `RUN_DIR/<task_id>/` and inside some `scope_escritura` entry of the task.
 7. `directory` is consistent with `worktree` and `run.workspace.directory`.
 8. `run.workspace.directory` equals `pwd -P`.

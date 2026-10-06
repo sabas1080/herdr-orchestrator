@@ -72,7 +72,7 @@ The task file you pass with `--prompt-file` holds only the task body (objective,
 | Exit 5 | Tell the user which pane needs approval; wait for them, then `reconcile` (after `dispatch` exit 5 with "not sent") or `wait` |
 | Exit 4 (stuck) | Keep waiting, or `task set --estado cancelled --notas "<effects>"` and `task add` a new task on another worker |
 | `wait` exit 1 | Worker gone: task is `interrupted`; ask the user before recreating workers. Herdr errors: check `preflight`, then retry `wait` |
-| `verify` `[FAIL]` | Send the worker a short continuation asking for the missing report/evidence; never write it yourself |
+| `verify` `[FAIL]` | Send the worker a short continuation (`herdr agent prompt <agent_name> "..." --wait --timeout 600000`), then `verify` again; if herdr reports `blocked`/`agent_blocked`, ask the user (H8); never write it yourself |
 | `teardown` warns about active tasks / exits 1 | Settle or cancel those tasks first; for panes it could not close, report them to the user |
 
 `teardown` follows panes that moved, skips the orchestrator pane, never uses `--force`, and removes worktrees only with `--remove-worktrees`.
@@ -82,9 +82,9 @@ The task file you pass with `--prompt-file` holds only the task body (objective,
 Mark the run **degraded** and never claim `verified` for affected tasks.
 
 - **A — no herdr:** deliver the plan and the task list; do not run anything.
-- **B — kind without integration / status `unknown`:** prefer another kind; otherwise continue and say the run is degraded.
+- **B — kind without integration / status `unknown`:** `orch.sh` refuses to dispatch to a worker whose status is unknown; switch kind or install the integration (`herdr integration status`).
 - **C — no evidence produced:** `task set --estado partial --notas "<why>"`.
-- **D — stuck or failed worker:** `task set --estado cancelled --notas "<effects reconciled>"`, then `task add` a new task (new ID) on another worker with the same scope.
+- **D — stuck or failed worker:** ask the user to interrupt that worker in its pane (`orch.sh` never sends keys), then `task set --estado cancelled --notas "<effects reconciled>"`, then `task add` a new task (new ID) on another worker with the same scope.
 
 ## Ledger and evidence
 

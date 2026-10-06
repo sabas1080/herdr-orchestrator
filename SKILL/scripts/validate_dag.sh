@@ -125,6 +125,7 @@ function active_state(s) {
   return s == "launching" || s == "running" || s == "awaiting-approval" || s == "outcome-unknown"
 }
 function needs_deps_verified(s) { return active_state(s) || s == "completed" || s == "verified" }
+function releases(s) { return s == "blocked" || s == "failed" || s == "partial" || s == "interrupted" || s == "cancelled" }
 BEGIN {
   NREQ = split("task_id agent_name title kind pane_id worktree directory dependencias scope_escritura criterion output_path evidence_refs estado runtime_status execution_outcome created_at last_state_at notas", REQ, " ")
   for (r = 1; r <= NREQ; r++) TASK_KEYS[REQ[r]] = 1
@@ -316,8 +317,8 @@ END {
     if (adjacency[i, k]) for (j = 1; j <= task_n; j++) if (adjacency[k, j]) adjacency[i, j] = 1
   scope_bad = 0
   for (i = 1; i <= task_n; i++) for (j = i + 1; j <= task_n; j++) {
-    # Cancelled tasks release their scope (spec §5 check 5, Degraded D).
-    if (task_value[i, "estado"] == "cancelled" || task_value[j, "estado"] == "cancelled") continue
+    # Terminal non-verified tasks release their scope (spec §5 check 5, Degraded D).
+    if (releases(task_value[i, "estado"]) || releases(task_value[j, "estado"])) continue
     if (adjacency[i, j] || adjacency[j, i]) continue
     found = 0
     for (p = 1; p <= scopes[i]; p++) for (q = 1; q <= scopes[j]; q++)

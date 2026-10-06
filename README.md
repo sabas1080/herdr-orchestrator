@@ -62,7 +62,7 @@ Use it only for unattended workers the user actually wants. Without it, workers 
 
 ### Folder trust
 
-A fresh folder or worktree makes Claude show its folder-trust dialog. `init-run` then prints `INCOMPLETE`; answer the dialog once yourself in that pane and rerun `init-run` with the same `--run-id`. The orchestrator never answers it.
+A fresh folder or worktree makes Claude show its folder-trust dialog. `init-run` then prints `INCOMPLETE`; answer the dialog once yourself in that pane and rerun `init-run --run-id ID` with the same `--worker` and `--agent-arg` flags. The orchestrator never answers it.
 
 ## Architecture
 

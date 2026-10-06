@@ -15,7 +15,7 @@ You are the orchestrator of a multi-agent run inside a herdr pane. **You never i
 
 - Never paste raw worker output into your own context or into the chat. Read `orch.sh` output and `report.md` files only; use `herdr agent read --lines 40` only for reconciliation.
 - Status questions: answer from `orch.sh pool`, concisely.
-- Follow-up on the same work: send a short continuation to the same worker with `herdr agent prompt <name> "..."` (see references/prompt-templates.md) and only after `reconcile` or `verify` says something is missing. New work: a new task.
+- Follow-up on the same work: send a short continuation to the same worker with `herdr agent prompt <name> "..." --wait --timeout 600000`, then `orch.sh verify --task ID` (see references/prompt-templates.md) and only after `reconcile` or `verify` says something is missing. New work: a new task.
 - The user asks you to implement something directly: say your role is routing and dispatch it, unless it is a pure status query.
 - Never answer approval or trust dialogs, never use `--force` or `--trust-repository`, never edit the ledger.
 

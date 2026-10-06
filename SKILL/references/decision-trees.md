@@ -39,7 +39,7 @@ orch.sh wait --task ID
  |              herdr error x3: estado unchanged --> preflight, retry wait
  +-- exit 3 --> reconcile --task ID --> pending? re-dispatch (after Verify effects)
  |                                      running / awaiting-approval / completed? continue
- +-- exit 4 --> stuck (advisory): keep waiting, or
+ +-- exit 4 --> stuck (advisory): keep waiting, or ask the user to interrupt that worker in its pane, then
  |              task set --estado cancelled --notas "<effects>" + task add (new ID, other worker)
  +-- exit 5 --> tell the user which pane needs approval --> wait again (never approve)
 ```
