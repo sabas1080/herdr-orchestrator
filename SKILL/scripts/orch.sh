@@ -391,24 +391,26 @@ EOF
           "$_dp_t" "$_dp_name" "$(ledger_get "$_dp_t" pane_id)" "$_dp_t"
         exit 5 ;;
       *)
-        with_lock set_state "$_dp_t" outcome-unknown "" "dispatch: $H_ERR"
+        if [ "$H_ERR" = agent_prompt_stalled ]; then _dp_note="prompt sent: agent_prompt_stalled"
+        else _dp_note="send uncertain: $H_ERR"; fi
+        with_lock set_state "$_dp_t" outcome-unknown "" "$_dp_note"
         printf 'dispatch: %s outcome-unknown (%s); do not resend; run: orch.sh reconcile --task %s\n' "$_dp_t" "$H_ERR" "$_dp_t"
         exit 3 ;;
     esac
   fi
   case "$_dp_st" in
     idle|done)
-      with_lock set_state "$_dp_t" completed "$_dp_st"
+      with_lock set_state "$_dp_t" completed "$_dp_st" "prompt sent"
       printf 'dispatch: %s completed (%s); next: orch.sh verify --task %s\n' "$_dp_t" "$_dp_st" "$_dp_t"; exit 0 ;;
     blocked)
-      with_lock set_state "$_dp_t" awaiting-approval blocked
+      with_lock set_state "$_dp_t" awaiting-approval blocked "prompt sent"
       notify "$_dp_t: $_dp_name needs approval" request
       printf 'dispatch: %s awaiting approval in pane %s; ask the user\n' "$_dp_t" "$(ledger_get "$_dp_t" pane_id)"; exit 5 ;;
     working)
-      with_lock set_state "$_dp_t" running working
+      with_lock set_state "$_dp_t" running working "prompt sent"
       printf 'dispatch: %s running on %s\n' "$_dp_t" "$_dp_name" ;;
     *)
-      with_lock set_state "$_dp_t" outcome-unknown "" "dispatch: agent status $_dp_st"
+      with_lock set_state "$_dp_t" outcome-unknown "" "prompt sent; dispatch: agent status $_dp_st"
       printf 'dispatch: %s outcome-unknown (status %s); run: orch.sh reconcile --task %s\n' "$_dp_t" "$_dp_st" "$_dp_t"; exit 3 ;;
   esac
   if [ "$_dp_wait" = 1 ]; then
@@ -453,7 +455,11 @@ sub_wait() {
       [ "$_wt_slice" -ge 1000 ] || _wt_slice=1000
     fi
     hcall agent wait "$_wt_name" --timeout "$_wt_slice"
-    if [ "$H_ERR" = agent_not_found ]; then _wt_st=gone; else _wt_st=$(agent_status "$_wt_name"); fi
+    case "$H_ERR" in
+      ''|timeout) _wt_st=$(agent_status "$_wt_name") ;;
+      agent_not_found) _wt_st=gone ;;
+      *) _wt_st="error:$H_ERR" ;;
+    esac
     case "$_wt_st" in
       idle|done)
         with_lock set_state "$_wt_t" completed "$_wt_st"
@@ -520,13 +526,14 @@ sub_reconcile() {
         if ! hcall agent read "$_rc_name" --source recent-unwrapped --lines 400; then
           printf 'reconcile: %s unchanged (pane read failed: %s)\n' "$_rc_t" "$H_ERR"; exit 3
         fi
-        _rc_rtold=$(ledger_get "$_rc_t" runtime_status)
+        _rc_rtold=$(ledger_get "$_rc_t" runtime_status); _rc_notas=$(ledger_get "$_rc_t" notas)
         if printf '%s\n' "$H_OUT" | grep -F -- "$(task_marker "$_rc_t")" >/dev/null; then
           _rc_new=completed; _rc_note="reconcile: prompt seen, no report yet"
-        elif [ "$_rc_rtold" = working ] || [ "$_rc_rtold" = blocked ] ||
-             ledger_get "$_rc_t" notas | grep -F -- "wait: timeout" >/dev/null; then
-          _rc_new=completed; _rc_note="reconcile: delivered earlier; no report"
-        else _rc_new=pending; _rc_rt=""; _rc_note="reconciled: prompt not delivered"; fi
+        elif case "$_rc_notas" in *"prompt not sent"*) true ;;
+               *"prompt sent"*) false ;;
+               *) case "$_rc_rtold" in ''|null) true ;; *) false ;; esac ;; esac; then
+          _rc_new=pending; _rc_rt=""; _rc_note="reconciled: prompt not delivered"
+        else _rc_new=completed; _rc_note="reconcile: delivered earlier; no report"; fi
       fi ;;
     *) printf 'reconcile: %s unchanged (agent status %s)\n' "$_rc_t" "$_rc_st"; exit 3 ;;
   esac

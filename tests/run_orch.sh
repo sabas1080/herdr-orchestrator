@@ -385,13 +385,13 @@ check wait-timeout-state 0 "outcome-unknown" st W1
 unknown_task() {
   setup_run "$1"
   orch task add --id W1 --worker 1 --criterion c --scope docs/a >/dev/null
-  resp agent_prompt '' 1 "$(herr agent_prompt_stalled)"
+  resp agent_prompt '' 1 "$(herr "${2:-agent_prompt_stalled}")"
   orch dispatch --task W1 --prompt-file "$WS/task.md" >/dev/null
 }
 unknown_task rec-report
 mkdir -p "$WS/.herdr-orch/t/W1"; printf '# r\n' > "$WS/.herdr-orch/t/W1/report.md"
 check rec-report-completed 0 "completed" orch reconcile --task W1
-unknown_task rec-not-delivered
+unknown_task rec-not-delivered agent_blocked
 resp agent_read 'unrelated scrollback'
 check rec-not-delivered 0 "pending" orch reconcile --task W1
 unresp agent_prompt; resp agent_prompt "$(agent_json "$N1" done)"
@@ -487,6 +487,37 @@ resp agent_wait '' 1 "$(herr timeout)"
 orch wait --task W1 --timeout 1 >/dev/null
 check fix6-slice 0 "" grep -q '^agent wait .* --timeout 1000$' "$FAKE_HERDR_DIR/calls.log"
 check fix6-slice-not-60000 0 "" sh -c "! grep -q -- '--timeout 60000' '$FAKE_HERDR_DIR/calls.log'"
+
+# ---- Task 6 fix round 2 -------------------------------------------------------
+running_task fix7-wait-unk
+resp agent_get "$(agent_json "$N1" working)"
+resp agent_wait '' 1 "$(herr unknown_command)"
+reset_counts; : > "$FAKE_HERDR_DIR/calls.log"
+check fix7-wait-unk 1 "herdr error (unknown_command); estado unchanged" orch wait --task W1
+check fix7-wait-unk-calls 0 "" sh -c "[ \$(grep -c '^agent wait' '$FAKE_HERDR_DIR/calls.log') -le 3 ]"
+check fix7-wait-unk-state 0 "running" st W1
+
+setup_run fix7-weird
+orch task add --id W1 --worker 1 --criterion c --scope docs/a >/dev/null
+resp agent_prompt "$(agent_json "$N1" weird)"
+check fix7-weird 3 "outcome-unknown" orch dispatch --task W1 --prompt-file "$WS/task.md"
+check fix7-weird-notas 0 "prompt sent" st W1 notas
+resp agent_get "$(agent_json "$N1" idle)"; resp agent_read 'unrelated scrollback'
+check fix7-weird-reconcile 0 "completed" orch reconcile --task W1
+
+unknown_task fix7-stalled
+check fix7-stalled-notas 0 "prompt sent" st W1 notas
+resp agent_get "$(agent_json "$N1" idle)"; resp agent_read 'unrelated scrollback'
+check fix7-stalled-reconcile 0 "completed" orch reconcile --task W1
+
+unknown_task fix7-blocked agent_blocked
+resp agent_get "$(agent_json "$N1" idle)"; resp agent_read 'unrelated scrollback'
+check fix7-blocked-reconcile 0 "pending" orch reconcile --task W1
+unresp agent_prompt; resp agent_prompt "$(agent_json "$N1" done)"
+check fix7-blocked-redispatch 0 "completed" orch dispatch --task W1 --prompt-file "$WS/task.md"
+
+unknown_task fix7-other agent_start_failed
+check fix7-other-notas 0 "send uncertain: agent_start_failed" st W1 notas
 
 # ---- orch.sh subcommand cases are appended by Tasks 4-7 --------------------
 
