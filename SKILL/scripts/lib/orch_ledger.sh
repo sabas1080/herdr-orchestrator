@@ -25,7 +25,7 @@ ledger_new() {
     printf '    herdr_workspace_id: %s\n    herdr_tab_id: %s\n' "$(yaml_q "$2")" "$(yaml_q "$3")"
     printf '  orchestrator:\n    pane_id: %s\n    kind: %s\n' "$(yaml_q "$4")" "$(yaml_q "$5")"
     printf 'tasks: []\n'
-  } > "$_ln_tmp" && mv "$_ln_tmp" "$LEDGER"
+  } > "$_ln_tmp" && mv "$_ln_tmp" "$LEDGER" || { rm -f "$_ln_tmp"; return 1; }
 }
 # ledger_append_task KEY=YAMLVALUE... in schema order, task_id first (writer)
 ledger_append_task() {
@@ -37,7 +37,7 @@ ledger_append_task() {
       if [ "$_la_first" = 1 ]; then printf '  - %s: %s\n' "${_la_kv%%=*}" "${_la_kv#*=}"; _la_first=0
       else printf '    %s: %s\n' "${_la_kv%%=*}" "${_la_kv#*=}"; fi
     done
-  } > "$_la_tmp" && mv "$_la_tmp" "$LEDGER"
+  } > "$_la_tmp" && mv "$_la_tmp" "$LEDGER" || { rm -f "$_la_tmp"; return 1; }
 }
 # ledger_get TASK FIELD -> decoded scalar ("" for null), raw text for lists
 ledger_get() {
@@ -88,7 +88,7 @@ ledger_update() {
       { print }
       END { if (!found) exit 3; for (k in upd) if (!(k in hit)) exit 4 }
     ' - "$LEDGER" > "$_lu_tmp"; then
-    mv "$_lu_tmp" "$LEDGER"
+    mv "$_lu_tmp" "$LEDGER" || { rm -f "$_lu_tmp"; die "ledger_update: could not replace ledger"; }
   else
     rm -f "$_lu_tmp"; die "ledger_update: task $_lu_id or one of its fields not found"
   fi
@@ -148,9 +148,9 @@ workers_set() {
   _ws_tmp=$WORKERS.tmp.$$
   awk -F'\t' -v OFS='\t' -v n="$1" -v c="$2" -v v="$3" '
     NR == 1 { for (i = 1; i <= NF; i++) col[$i] = i; print; next }
-    $2 == n { $(col[c]) = v } { print }' "$WORKERS" > "$_ws_tmp" && mv "$_ws_tmp" "$WORKERS"
+    $2 == n { $(col[c]) = v } { print }' "$WORKERS" > "$_ws_tmp" && mv "$_ws_tmp" "$WORKERS" || { rm -f "$_ws_tmp"; return 1; }
 }
 workers_delete() {
   _wd_tmp=$WORKERS.tmp.$$
-  awk -F'\t' -v n="$1" 'NR == 1 || $2 != n' "$WORKERS" > "$_wd_tmp" && mv "$_wd_tmp" "$WORKERS"
+  awk -F'\t' -v n="$1" 'NR == 1 || $2 != n' "$WORKERS" > "$_wd_tmp" && mv "$_wd_tmp" "$WORKERS" || { rm -f "$_wd_tmp"; return 1; }
 }

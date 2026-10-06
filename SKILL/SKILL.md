@@ -39,7 +39,7 @@ The task file you pass with `--prompt-file` holds only the task body (objective,
 3. **`init-run --worker KIND[:Title]…`** — one flag per worker; titles may contain spaces. Default titles come from the dragon catalog. Rerun with the same `--run-id` to complete a partial start (never create workers by hand). Add `--worktree` **only if the user asked** for isolated git worktrees. `--agent-arg ARG` (repeatable) is passed after `--` to `herdr agent start`, e.g. `--agent-arg --permission-mode --agent-arg auto` so Claude workers do not stop at approval prompts; use it **only when the user wants unattended workers**. A new folder or worktree triggers Claude's folder-trust dialog: the user answers it once (H8), then rerun `init-run`.
 4. **`task add`** per task — the ledger is validated on every add; overlapping scopes need `--deps`.
 5. **Write each task file and `dispatch`** (`--wait` to block until it settles).
-6. **`wait`** — exit `0` completed; `1` worker gone (task `interrupted`) or persistent herdr errors (state unchanged); `3` timeout/outcome unknown → `reconcile`; `4` stuck (advisory) → keep waiting or Degraded D; `5` approval pending → **ask the user**, then `wait` again.
+6. **`wait`** — exit `0` completed; `1` worker gone (task `interrupted`), persistent herdr errors, or status unknown for this kind (state unchanged); `3` timeout/outcome unknown → `reconcile`; `4` stuck (advisory) → keep waiting or Degraded D; `5` approval pending → **ask the user**, then `wait` again.
 7. **`verify`** — read only the task's `report.md`; the evidence gate decides `verified`.
 8. **`close`** (`--allow-degraded` when some task legitimately failed) and deliver the output contract. `teardown` is a dry run; `teardown --confirm` closes the run's worker panes only when the user wants them gone; with `--remove-worktrees` each worktree is removed instead of closing its pane.
 
@@ -71,7 +71,7 @@ The task file you pass with `--prompt-file` holds only the task body (objective,
 | `dispatch`/`wait` exit 3, or `dispatch` refuses a `launching` task | `reconcile --task`. It accepts `launching`, `outcome-unknown`, `running`, `awaiting-approval`, and returns the task to `pending` only when the prompt provably never arrived (dispatch notes `prompt sent` / `prompt not sent`); otherwise it moves to `completed`/`running`/`awaiting-approval`/`interrupted` from the worker's real state, or exits 3 leaving it unchanged |
 | Exit 5 | Tell the user which pane needs approval; wait for them, then `reconcile` (after `dispatch` exit 5 with "not sent") or `wait` |
 | Exit 4 (stuck) | Keep waiting, or `task set --estado cancelled --notas "<effects>"` and `task add` a new task on another worker |
-| `wait` exit 1 | Worker gone: task is `interrupted`; ask the user before recreating workers. Herdr errors: check `preflight`, then retry `wait` |
+| `wait` exit 1 | Worker gone: task is `interrupted`; ask the user before recreating workers. Herdr errors: check `preflight`, then retry `wait`. `status unknown (no herdr integration for this kind?); estado unchanged`: do not retry `wait`; switch the worker kind or install the herdr integration (Degraded B), and `task set` the task if needed |
 | `verify` `[FAIL]` | Send the worker a short continuation (`herdr agent prompt <agent_name> "..." --wait --timeout 600000`), then `verify` again; if herdr reports `blocked`/`agent_blocked`, ask the user (H8); never write it yourself |
 | `teardown` warns about active tasks / exits 1 | Settle or cancel those tasks first; for panes it could not close, report them to the user |
 

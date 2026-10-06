@@ -685,6 +685,16 @@ setup_run ff5-timeout
 orch task add --id W1 --worker 1 --criterion c --scope docs/a >/dev/null
 check ff5-dispatch-timeout-nowait 2 "--timeout requires --wait" orch dispatch --task W1 --prompt-file "$WS/task.md" --timeout 5000
 
+# task add: a failed append leaves no .ledger.tmp.* behind (temp path is a
+# symlink to /dev/full so the write fails after the temp is opened)
+setup_run fix-append-leak
+R=$WS/.herdr-orch/t
+cp "$R/ledger.yaml" "$TMP/ledger.before"
+check append-leak-fails 1 "could not be appended" sh -c "ln -s /dev/full '$R/.ledger.tmp.'\$\$; PATH='$FAKE_BIN:'\$PATH HERDR_ENV=1 HERDR_PANE_ID=w1:p1 exec sh -c 'cd \"$WS\" && exec sh \"$ORCH\" task add --id W1 --worker 1 --criterion c --scope docs/a'"
+check append-leak-ledger 0 "" cmp "$TMP/ledger.before" "$R/ledger.yaml"
+check append-leak-no-temp 0 "" sh -c "[ -z \"\$(ls -A '$R' | grep '^\.ledger\.tmp\.')\" ]"
+check append-leak-retry 0 "task W1 added" orch task add --id W1 --worker 1 --criterion c --scope docs/a
+
 # ---- orch.sh subcommand cases are appended by Tasks 4-7 --------------------
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAILS"

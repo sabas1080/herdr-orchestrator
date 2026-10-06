@@ -14,14 +14,15 @@
 | Name collision | live agent with the same name outside this run | Fail closed; choose another title or run id | Rename the foreign agent |
 | Pane moved | recorded `pane_id` gone, agent name live | `init-run` reuse and `teardown` refresh `workers.tsv` by agent name; the ledger's `pane_id` is informational and may be stale (dispatch/wait messages may show the old id) | Use the old pane ID |
 | Pane closed externally | `agent_not_found` / `pool` shows `gone` | Active task → `interrupted`; ask before recreating | Assume the work finished |
-| Evidence gate fails | `verify` prints `[FAIL]` | Keep `completed`; ask the worker (continuation prompt) for the missing evidence | Write the evidence yourself |
+| Evidence gate fails | `verify` prints `[FAIL]` | Keep `completed`; ask the worker via `herdr agent prompt <agent_name> "…" --wait`, then `orch.sh verify --task ID`, for the missing evidence | Write the evidence yourself |
 | Incomplete init | `INCOMPLETE`, exit 1 | Rerun `init-run` with the same `--run-id` | Create workers by hand |
 | Version skew | `herdr status --json` `.server.compatible == false` | Stop; report | Upgrade or restart the server |
 | Lock contention | lock not acquired within timeout | Retry later; report | Delete the lock while another `orch.sh` runs |
 
 Other behaviours worth knowing:
 
-- `wait` exits 1 with `herdr error (<code>); estado unchanged` after 3 consecutive failing slices: run `preflight`, then retry `wait`. The stuck advisory (exit 4) only fires while the worker is `working`.
+- `wait` exits 1 with `herdr error (<code>); estado unchanged` after 3 consecutive failing slices: run `preflight`, then retry `wait`.
+- `wait` exits 1 with `status unknown (no herdr integration for this kind?); estado unchanged`: do not retry `wait`; switch the worker kind or install the herdr integration (see Degraded B), and `task set` the task if needed. The stuck advisory (exit 4) only fires while the worker is `working`.
 - `dispatch` refuses a task left in `launching` (a previous dispatch did not finish): `reconcile` it.
 - `teardown` exits 1 when a pane could not be closed or a worktree not removed (dirty worktree: kept, pane left open); it warns about tasks still active and skips the orchestrator pane. A pane that moved is followed by agent name; an already closed pane counts as done.
 

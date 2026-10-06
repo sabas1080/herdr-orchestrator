@@ -78,7 +78,7 @@ Needs the task `running` or `awaiting-approval`. Slices of 60 s, no raw output.
 | Exit | Meaning | Next |
 | --- | --- | --- |
 | `0` | `wait: W1 completed (idle|done)` | `verify` |
-| `1` | agent gone (task `interrupted`), or herdr failed 3 consecutive slices (`herdr error (<code>); estado unchanged`) | gone: ask the user before recreating; herdr error: `preflight`, then retry `wait` |
+| `1` | agent gone (task `interrupted`), or herdr failed 3 consecutive slices (`herdr error (<code>); estado unchanged`) | gone: ask the user before recreating; herdr error: `preflight`, then retry `wait`; `status unknown (no herdr integration for this kind?); estado unchanged`: do not retry `wait`, switch the worker kind or install the herdr integration (Degraded B), `task set` if needed |
 | `3` | timeout, task `outcome-unknown` | `reconcile --task W1` |
 | `4` | stuck: no output change for N s (default 1800) while `working`; `estado` unchanged | keep waiting, or Degraded D (ask the user to interrupt that worker in its pane first) |
 | `5` | worker `blocked`, task `awaiting-approval`, notification sound `request` | tell the user which pane needs approval, then `wait` again |
