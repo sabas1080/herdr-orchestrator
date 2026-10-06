@@ -63,7 +63,7 @@ lock_acquire() {
   until mkdir "$RUN_DIR/.lock" 2>/dev/null; do
     _lk_i=$((_lk_i + 1))
     if [ "$_lk_i" -ge 120 ]; then
-      _lk_age=""; _lk_m=$(stat -c %Y "$RUN_DIR/.lock" 2>/dev/null) &&
+      _lk_age=""; _lk_m=$(stat -c %Y "$RUN_DIR/.lock" 2>/dev/null || stat -f %m "$RUN_DIR/.lock" 2>/dev/null) &&
         _lk_age=" (lock age: $(( $(date +%s) - _lk_m ))s)"
       die "could not acquire $RUN_DIR/.lock within 60s$_lk_age; if no orch.sh is running remove it: rmdir '$RUN_DIR/.lock'"
     fi
