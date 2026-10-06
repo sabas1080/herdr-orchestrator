@@ -59,7 +59,7 @@ orch() { (cd "$WS" && PATH="$FAKE_BIN:$PATH" HERDR_ENV=1 HERDR_PANE_ID=w1:p1 sh 
 calls() { grep -c -- "$1" "$FAKE_HERDR_DIR/calls.log" || true; }
 # lib CODE: run CODE with the orch libraries sourced, inside the case workspace
 lib() {
-  (cd "$WS" && PATH="$FAKE_BIN:$PATH" && set -f && SKILL_SCRIPTS=$SCRIPTS &&
+  (cd "$WS" && PATH="$FAKE_BIN:$PATH" && set -f && set -u && SKILL_SCRIPTS=$SCRIPTS &&
    . "$SCRIPTS/lib/orch_common.sh" && . "$SCRIPTS/lib/orch_ledger.sh" && . "$SCRIPTS/lib/orch_herdr.sh" &&
    eval "$1")
 }
@@ -122,6 +122,12 @@ check lib-agent-status-gone 0 "gone" lib 'agent_status w01-x'
 resp agent_get "$(agent_json w01-x working)"
 check lib-agent-status 0 "working" lib 'agent_status w01-x'
 check lib-shell-ready 0 "" lib 'shell_ready w1:p2'
+resp pane_process-info '{"result":{"process_info":{},"type":"pane_process_info"}}'
+check lib-shell-ready-empty 1 "" lib 'shell_ready w1:p2'
+check lib-slugify-ascii 0 "" env LC_ALL=$(locale -a | grep -im1 'utf-\?8' || echo C) sh -c '
+  . "$1/lib/orch_common.sh"; o=$(slugify "Ñandú 42"); printf "%s\n" "$o"; printf "%s" "$o" | grep -qx "[a-z0-9-]*"' _ "$SCRIPTS"
+check lib-die-releases-lock 0 "" lib_run '
+  ( lock_acquire; die x ) 2>/dev/null; [ ! -d "$RUN_DIR/.lock" ]'
 
 # ---- orch.sh subcommand cases are appended by Tasks 4-7 --------------------
 

@@ -2,7 +2,7 @@
 # Globals: SKILL_SCRIPTS (set by the caller), WS, ORCH_HOME, RUN_ID, RUN_DIR,
 # LEDGER, WORKERS, LOCK_HELD.
 
-die() { printf 'ERROR: %s\n' "$1" >&2; exit "${2:-1}"; }
+die() { printf 'ERROR: %s\n' "$1" >&2; lock_release; exit "${2:-1}"; }
 usage_die() { die "$1" 2; }
 now_utc() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
@@ -26,8 +26,8 @@ yaml_list() {
 }
 # slugify TEXT -> [a-z0-9-], at most 20 chars, no leading/trailing dash
 slugify() {
-  printf '%s' "$1" | tr 'A-Z' 'a-z' | sed -e 's/[^a-z0-9][^a-z0-9]*/-/g' -e 's/^-//' -e 's/-$//' |
-    cut -c1-20 | sed 's/-$//'
+  printf '%s' "$1" | LC_ALL=C tr 'A-Z' 'a-z' | LC_ALL=C sed -e 's/[^a-z0-9][^a-z0-9]*/-/g' -e 's/^-//' -e 's/-$//' |
+    LC_ALL=C cut -c1-20 | LC_ALL=C sed 's/-$//'
 }
 # run_suffix RUN_ID -> 4 hex chars derived from the run id (agent names are
 # server-global, so two runs must not produce the same name)
@@ -62,7 +62,11 @@ lock_acquire() {
   _lk_i=0
   until mkdir "$RUN_DIR/.lock" 2>/dev/null; do
     _lk_i=$((_lk_i + 1))
-    [ "$_lk_i" -lt 120 ] || die "could not acquire $RUN_DIR/.lock within 60s; if no orch.sh is running remove it: rmdir '$RUN_DIR/.lock'"
+    if [ "$_lk_i" -ge 120 ]; then
+      _lk_age=""; _lk_m=$(stat -c %Y "$RUN_DIR/.lock" 2>/dev/null) &&
+        _lk_age=" (lock age: $(( $(date +%s) - _lk_m ))s)"
+      die "could not acquire $RUN_DIR/.lock within 60s$_lk_age; if no orch.sh is running remove it: rmdir '$RUN_DIR/.lock'"
+    fi
     sleep 0.5 2>/dev/null || sleep 1
   done
   LOCK_HELD=1

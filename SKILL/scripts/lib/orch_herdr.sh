@@ -4,7 +4,7 @@
 
 # hcall ARGS...: run herdr; sets H_OUT, H_RC, H_ERR ("" on success), H_ERRMSG
 hcall() {
-  _hc_err=$(mktemp "${TMPDIR:-/tmp}/orch-herr.XXXXXX")
+  _hc_err=$(mktemp "${TMPDIR:-/tmp}/orch-herr.XXXXXX") || die "mktemp failed" 2
   H_OUT=$(herdr "$@" 2>"$_hc_err"); H_RC=$?
   H_ERR=""; H_ERRMSG=""
   if [ "$H_RC" -ne 0 ]; then
@@ -29,7 +29,7 @@ live_agent_names() {
 # shell_ready PANE -> 0 when the pane's shell owns the foreground (nothing running)
 shell_ready() {
   hcall pane process-info --pane "$1" || return 1
-  [ "$(printf '%s' "$H_OUT" | jq -r '.result.process_info | (.foreground_process_group_id == .shell_pid)')" = true ]
+  [ "$(printf '%s' "$H_OUT" | jq -r '.result.process_info | (.shell_pid != null and .foreground_process_group_id == .shell_pid)')" = true ]
 }
 wait_shell_ready() {
   _wr_i=0
