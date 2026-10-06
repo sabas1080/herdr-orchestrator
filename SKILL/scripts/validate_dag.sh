@@ -30,7 +30,7 @@ if [ ! -f "$LEDGER" ] || [ ! -r "$LEDGER" ]; then
   exit 2
 fi
 
-awk -v pwd="$WS_PHYS" "$_VAL_LIB
+WS_PHYS="$WS_PHYS" awk "$_VAL_LIB
 "'
 function fail(msg) { printf "[FAIL] %s\n", msg; failures++ }
 function ok(msg) { printf "[OK] %s\n", msg; passed++ }
@@ -130,7 +130,7 @@ BEGIN {
   for (r = 1; r <= NREQ; r++) TASK_KEYS[REQ[r]] = 1
   NRUN = split("run_id herdr.server_version workspace.directory workspace.herdr_workspace_id workspace.herdr_tab_id orchestrator.pane_id orchestrator.kind", RK, " ")
   for (r = 1; r <= NRUN; r++) RUN_KEYS[RK[r]] = 1
-  ws = normpath(pwd)
+  ws = normpath(ENVIRON["WS_PHYS"])
 }
 {
   if (FNR == 1 && substr($0, 1, 3) == "\357\273\277") $0 = substr($0, 4)   # strip UTF-8 BOM

@@ -1,29 +1,18 @@
 #!/bin/sh
-# Final gate for a closed two-level ledger. YAML structure, IDs, ownership,
-# dependencies, cycles, scopes, timestamps and concurrency are delegated to validate_dag.sh.
-# Dependencies: POSIX sh, awk and the POSIX dirname utility.
+# Final gate for a closed herdr-orchestrator ledger (schema 4). Structure, IDs,
+# states, paths, dependencies, cycles, scopes and timestamps are delegated to
+# validate_dag.sh; this script adds the closure and evidence gates (spec §5).
+# Dependencies: POSIX sh, awk and dirname. Run it from run.workspace.directory.
+# output_path / evidence_refs are absolute (validate_dag.sh enforces it).
 # Exit codes: 0 = pass, 1 = validation failure, 2 = usage / environment error.
-# Run it from the workspace root: relative output_path / evidence_refs resolve from the
-# physical working directory (pwd -P). Paths under run.location.directory are rebased onto
-# run.location.directory_client (when present), like validate_dag.sh does; any absolute
-# path that ends outside the workspace is rejected.
-# Windows-form directory_client (C:\...) with a POSIX view of the same drive in the
-# shell (Git Bash /c/..., WSL /mnt/c/..., Cygwin /cygdrive/c/...) is mapped back onto the
-# physical view before the file tests. Only drive letters are mappable: for UNC or custom
-# mounts declare run.location.directory_client as the POSIX path the shell sees.
-# Encoding: UTF-8 without BOM is canonical (a leading BOM is tolerated). This script MUST
-# be checked out with LF endings (see .gitattributes).
 set -u
-# Byte-exact length/substr/comparisons, independent of the caller's locale.
 LC_ALL=C
 export LC_ALL
 command -v awk >/dev/null 2>&1 || { printf 'ERROR: awk not available\n' >&2; exit 2; }
-
 usage() {
   printf 'Usage: %s <ledger-path> [--require-evidence] [--allow-degraded]\n' "$0" >&2
   exit 2
 }
-
 LEDGER=
 REQUIRE_EVIDENCE=0
 ALLOW_DEGRADED=0
@@ -36,372 +25,131 @@ for arg in "$@"; do
   esac
 done
 [ -n "$LEDGER" ] || usage
-[ -f "$LEDGER" ] && [ -r "$LEDGER" ] || {
-  printf 'ERROR: cannot read the ledger: %s\n' "$LEDGER" >&2
-  exit 2
-}
+[ -f "$LEDGER" ] && [ -r "$LEDGER" ] || { printf 'ERROR: cannot read the ledger: %s\n' "$LEDGER" >&2; exit 2; }
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd) || exit 2
+[ -r "$SCRIPT_DIR/_validators.awk" ] || { printf 'ERROR: missing %s\n' "$SCRIPT_DIR/_validators.awk" >&2; exit 2; }
+_VAL_LIB=$(cat "$SCRIPT_DIR/_validators.awk")
+for f in validate_dag.sh check_evidence.sh; do
+  [ -r "$SCRIPT_DIR/$f" ] || { printf 'ERROR: missing %s\n' "$SCRIPT_DIR/$f" >&2; exit 2; }
+done
 
-WS_PHYS=$(pwd -P 2>/dev/null) || {
-  printf 'ERROR: cannot determine the current directory (pwd -P)\n' >&2
-  exit 2
-}
-export WS_PHYS
-
-SCRIPT_DIR=$(dirname "$0") || exit 2
-# Shared awk helpers (single source of truth, S1c-09): trim, strip_comment,
-# parse_scalar, split_items and list_items live in _validators.awk and are
-# prepended to BOTH awk programs below. Never re-define them here.
-_VAL_LIB=""
-[ -f "$SCRIPT_DIR/_validators.awk" ] && _VAL_LIB=$(cat "$SCRIPT_DIR/_validators.awk")
-DAG_VALIDATOR=$SCRIPT_DIR/validate_dag.sh
-[ -f "$DAG_VALIDATOR" ] && [ -r "$DAG_VALIDATOR" ] || {
-  printf 'ERROR: DAG validator missing: %s\n' "$DAG_VALIDATOR" >&2
-  exit 2
-}
-
-sh "$DAG_VALIDATOR" "$LEDGER"
+sh "$SCRIPT_DIR/validate_dag.sh" "$LEDGER"
 DAG_RC=$?
 [ "$DAG_RC" -ne 2 ] || exit 2
 
-# The DAG validator rejects syntax outside the canonical YAML subset. This
-# pass extracts close-gate fields and emits delimiter-safe records.
+# Extract the closure fields as delimiter-safe records (FS = \034).
 SEP=$(printf '\034')
 RECORDS=$(awk -v sep="$SEP" "$_VAL_LIB
 "'
-# Report the first extraction problem with its line number (stderr; stdout carries records).
 function badline(msg) {
   bad = 1
   if (!reported) { printf "[FAIL] line %d: %s\n", FNR, msg | "cat 1>&2"; reported = 1 }
 }
-function is_drive(p) {
-  return length(p) >= 3 && substr(p, 1, 1) ~ /[A-Za-z]/ && substr(p, 2, 1) == ":" &&
-         (substr(p, 3, 1) == "/" || substr(p, 3, 1) == "\\")
-}
-function is_unc(p) { return substr(p, 1, 2) == "\\\\" }
-function is_abs(p) { return substr(p, 1, 1) == "/" || is_drive(p) || is_unc(p) }
-# Collapse ".", ".." and repeated separators; Windows forms use "/" and an upper-case drive.
-function normp(p,   root, rest, n, parts, i, m, out, k, res, abs) {
-  root = ""; rest = p; abs = 0
-  if (is_drive(p)) { root = toupper(substr(p, 1, 1)) ":/"; rest = substr(p, 3); gsub(/\\/, "/", rest); abs = 1 }
-  else if (is_unc(p)) { root = "//"; rest = substr(p, 3); gsub(/\\/, "/", rest); abs = 1 }
-  else if (substr(p, 1, 1) == "/") { root = "/"; abs = 1 }
-  n = split(rest, parts, "/"); m = 0
-  for (i = 1; i <= n; i++) {
-    if (parts[i] == "" || parts[i] == ".") continue
-    if (parts[i] == "..") { if (m > 0 && out[m] != "..") m--; else if (!abs) out[++m] = ".." }
-    else out[++m] = parts[i]
-  }
-  res = ""
-  for (k = 1; k <= m; k++) res = res (k > 1 ? "/" : "") out[k]
-  if (abs) return root res
-  return (res == "") ? "." : res
-}
-function under(base, p,   lb) {
-  if (base == p) return 1
-  lb = length(base)
-  if (substr(base, lb, 1) == "/") return substr(p, 1, lb) == base
-  return substr(p, 1, lb) == base && substr(p, lb + 1, 1) == "/"
-}
-# Git Bash / WSL / Cygwin POSIX view of a drive (/c/x, /mnt/c/x, /cygdrive/c/x) to C:/x.
-function posix_to_win(p,   q) {
-  q = p
-  if (substr(q, 1, 5) == "/mnt/") q = substr(q, 5)
-  else if (substr(q, 1, 10) == "/cygdrive/") q = substr(q, 10)
-  if (length(q) >= 2 && substr(q, 1, 1) == "/" && substr(q, 2, 1) ~ /[A-Za-z]/ &&
-      (length(q) == 2 || substr(q, 3, 1) == "/"))
-    return normp(toupper(substr(q, 2, 1)) ":" (length(q) == 2 ? "/" : substr(q, 3)))
-  return p
-}
-function is_drive_norm(p) { return p ~ /^[A-Za-z]:\// }
-# Rebase a path under run.location.directory onto run.location.directory_client, check
-# workspace containment and return the path in the PHYSICAL view of the shell (pwd -P), so
-# that [ -f ] works. A path that ends outside the workspace is prefixed with !OUTSIDE!
-# (absolute paths outside it, or relative paths with "..").
-function resolve_path(p,   q, srv, cli, rel, wsn, wsw, winmode) {
-  if (p == "") return p
-  q = normp(p)
-  # Workspace form is resolved once for BOTH branches: winmode drives the
-  # backslash->slash conversion of a relative path, which must match
-  # validate_dag.sh canon_path (NS_WIN && !is_abs(p)). Reading winmode without
-  # assigning it here left the relative branch below as dead code.
-  srv = (SRVDIR != "") ? normp(SRVDIR) : ""
-  cli = (CLIDIR != "") ? normp(CLIDIR) : srv
-  winmode = (cli != "" && is_drive_norm(cli))
-  if (is_abs(p)) {
-    if (winmode && !is_drive_norm(q)) q = posix_to_win(q)
-    if (srv != "" && cli != "" && under(srv, q)) {
-      rel = (q == srv) ? "" : substr(q, length(srv) + (substr(srv, length(srv), 1) == "/" ? 1 : 2))
-      q = (rel == "") ? cli : normp(cli "/" rel)
-    }
-    wsn = normp(ENVIRON["WS_PHYS"]); wsw = wsn
-    if (winmode && !is_drive_norm(wsn)) wsw = posix_to_win(wsn)
-    if (!under(wsw, q)) return "!OUTSIDE!" p
-    rel = (q == wsw) ? "" : substr(q, length(wsw) + (substr(wsw, length(wsw), 1) == "/" ? 1 : 2))
-    return (rel == "") ? wsn : normp(wsn "/" rel)
-  }
-  if (q == ".." || substr(q, 1, 3) == "../") return "!OUTSIDE!" p
-  if (winmode) gsub(/\\/, "/", q)
-  return q
-}
 {
-  if (FNR == 1 && substr($0, 1, 3) == "\357\273\277") $0 = substr($0, 4)   # strip UTF-8 BOM
-  cr_line = $0; sub(/\r$/, "", cr_line)
-  line = strip_comment(cr_line)
-  if (line ~ /^run:/) { sect = "run"; in_loc = 0 }
-  else if (line ~ /^tasks:/) { sect = "tasks"; in_loc = 0 }
-  else if (sect == "run") {
-    if (line ~ /^  [A-Za-z_]+:/) in_loc = (line ~ /^  location:[ \t]*$/)
-    else if (in_loc && line ~ /^    (directory|directory_client):/) {
-      loc_key = line; sub(/^    /, "", loc_key); sub(/:.*/, "", loc_key)
-      loc_raw = line; sub(/^    [A-Za-z_]+:[ \t]*/, "", loc_raw)
-      if (parse_scalar(loc_raw, "")) { if (loc_key == "directory") SRVDIR = PVAL; else CLIDIR = PVAL }
-    }
-  }
+  if (FNR == 1 && substr($0, 1, 3) == "\357\273\277") $0 = substr($0, 4)
+  line = $0; sub(/\r$/, "", line); line = strip_comment(line)
   if (line ~ /^  - task_id:/) {
     raw = line; sub(/^  - task_id:[ \t]*/, "", raw)
-    if (!parse_scalar(raw, "")) { badline("invalid task_id (use a double-quoted string)"); next }
-    task_n++; current = task_n
-    task_id[current] = PVAL
-    task_state[current] = task_outcome[current] = task_runtime[current] = ""
-    task_kind[current] = task_parent[current] = task_criterion[current] = task_output[current] = ""
-    task_notas[current] = ""
-    task_runtime_null[current] = 0; task_output_null[current] = 0
-    task_evidence_n[current] = 0; task_open = 1
+    if (!parse_scalar(raw, 0)) { badline("invalid task_id"); next }
+    n++; id[n] = PVAL; ev_n[n] = 0; rt_null[n] = 0
+    st[n] = ""; oc[n] = ""; rt[n] = ""; cr[n] = ""; op[n] = ""; nt[n] = ""
     next
   }
-  if (task_open && line ~ /^    [A-Za-z_][A-Za-z0-9_]*:/) {
+  if (n && line ~ /^    [A-Za-z_][A-Za-z0-9_]*:/) {
     key = line; sub(/^    /, "", key); sub(/:.*/, "", key)
-    raw = line; sub(/^    [A-Za-z_][A-Za-z0-9_]*:[ \t]*/, "", raw)
-    raw = trim(raw)   # "null  " and "null # c" (comment already stripped) must equal "null"
+    raw = line; sub(/^    [A-Za-z_][A-Za-z0-9_]*:[ \t]*/, "", raw); raw = trim(raw)
     if (key == "evidence_refs") {
       if (!list_items(raw, LIST_ITEM)) { badline("invalid flow-style list in evidence_refs"); next }
-      task_evidence_n[current] = LIST_N
-      for (i = 1; i <= LIST_N; i++) task_evidence[current, i] = LIST_ITEM[i]
-    } else if (key == "parent_task_id") {
-      if (raw == "null") task_parent_null[current] = 1
-      else if (!parse_scalar(raw, "")) { badline("invalid scalar in parent_task_id"); next }
-      else { task_parent[current] = PVAL; task_parent_null[current] = 0 }
-    } else if (key == "task_kind" || key == "estado" || key == "execution_outcome" ||
-               key == "sessionID" || key == "runtime_status" || key == "criterion" ||
-               key == "output_path" || key == "notas") {
-      val_is_null = 0
-      if (raw == "null" && (key == "sessionID" || key == "runtime_status" || key == "output_path")) {
-        val = ""; val_is_null = 1
-      } else if (!parse_scalar(raw, "")) { badline("invalid scalar in " key); next }
-      else val = PVAL
-      if (key == "task_kind") task_kind[current] = val
-      else if (key == "estado") task_state[current] = val
-      else if (key == "execution_outcome") task_outcome[current] = val
-      else if (key == "sessionID") task_session_null[current] = val_is_null
-      else if (key == "runtime_status") { task_runtime[current] = val; task_runtime_null[current] = val_is_null }
-      else if (key == "criterion") task_criterion[current] = val
-      else if (key == "output_path") { task_output[current] = val; task_output_null[current] = val_is_null }
-      else if (key == "notas") task_notas[current] = val
+      ev_n[n] = LIST_N
+      for (i = 1; i <= LIST_N; i++) ev[n, i] = LIST_ITEM[i]
+    } else if (key == "runtime_status" && raw == "null") {
+      rt[n] = ""; rt_null[n] = 1
+    } else if (key ~ /^(estado|execution_outcome|runtime_status|criterion|output_path|notas)$/) {
+      if (!parse_scalar(raw, 0)) { badline("invalid scalar in " key); next }
+      if (key == "estado") st[n] = PVAL
+      else if (key == "execution_outcome") oc[n] = PVAL
+      else if (key == "runtime_status") rt[n] = PVAL
+      else if (key == "criterion") cr[n] = PVAL
+      else if (key == "output_path") op[n] = PVAL
+      else nt[n] = PVAL
     }
   }
 }
 END {
-  for (i = 1; i <= task_n; i++) {
-    integrated = ""
-    if (task_kind[i] == "worker_session" && task_state[i] == "verified") {
-      for (j = 1; j <= task_n; j++)
-        if (task_kind[j] == "subagent" && !task_parent_null[j] &&
-            task_parent[j] == task_id[i] && task_state[j] == "verified" &&
-            !task_session_null[j])
-          integrated = integrated (integrated == "" ? "" : ",") task_id[j]
-    }
-    clean_notas = task_notas[i]
-    gsub(/\034/, " ", clean_notas)
-    print "TASK" sep task_id[i] sep task_kind[i] sep task_state[i] sep task_outcome[i] sep task_runtime[i] sep task_runtime_null[i] sep task_criterion[i] sep resolve_path(task_output[i]) sep task_output_null[i] sep task_evidence_n[i] sep integrated sep clean_notas
-    for (k = 1; k <= task_evidence_n[i]; k++)
-      print "EVIDENCE" sep task_id[i] sep task_criterion[i] sep resolve_path(task_evidence[i, k]) sep task_kind[i] sep integrated
+  for (t = 1; t <= n; t++) {
+    clean = nt[t]; gsub(/\034/, " ", clean)
+    print "TASK" sep id[t] sep st[t] sep oc[t] sep rt[t] sep rt_null[t] sep cr[t] sep op[t] sep ev_n[t] sep clean
+    for (k = 1; k <= ev_n[t]; k++) print "EVIDENCE" sep id[t] sep st[t] sep cr[t] sep ev[t, k]
   }
   if (bad) exit 1
-}
-' "$LEDGER")
-EXTRACT_RC=$?
-if [ "$EXTRACT_RC" -ne 0 ]; then
-  printf '[FAIL] could not extract fields from the canonical ledger\n' >&2
+}' "$LEDGER")
+if [ "$?" -ne 0 ]; then
+  printf '[FAIL] could not extract fields from the ledger\n'
+  printf 'TOTAL: 0 passed, 1 failed\n'
   exit 1
 fi
 
 FAILS=0
 PASSED=0
 TASKS=0
-PATH_FAILURES=0
 if [ "$DAG_RC" -ne 0 ]; then
   FAILS=$((FAILS + 1))
   printf '[FAIL] the DAG gate rejected the ledger (exit %s)\n' "$DAG_RC"
 fi
 
-# Close-gate requirements for a task whose estado is "verified". These checks are
-# identical in strict mode and in --allow-degraded mode (only the strict branch
-# adds the "is not in local estado verified" precondition before calling).
-# Operates on the record fields already unpacked by the read loop below.
 check_verified() {
   if [ "$outcome" != "succeeded" ]; then
-    printf '[FAIL] %s requires execution_outcome succeeded (actual: %s)\n' "$task_id" "$outcome"
-    task_bad=1
+    printf '[FAIL] %s requires execution_outcome succeeded (actual: %s)\n' "$task_id" "$outcome"; task_bad=1
   fi
   if [ "$runtime_is_null" = "1" ] || [ -z "$runtime" ]; then
-    printf '[FAIL] %s records no observed runtime_status\n' "$task_id"
-    task_bad=1
-  fi
-  if [ -z "$criterion" ]; then
-    printf '[FAIL] %s records no criterion\n' "$task_id"
-    task_bad=1
+    printf '[FAIL] %s records no observed runtime_status\n' "$task_id"; task_bad=1
   fi
   if [ -z "$evidence_count" ] || [ "$evidence_count" -eq 0 ]; then
-    printf '[FAIL] %s verified without evidence_refs\n' "$task_id"
-    task_bad=1
+    printf '[FAIL] %s verified without evidence_refs\n' "$task_id"; task_bad=1
   fi
-  if [ "$output_is_null" = "1" ] || [ -z "$path" ]; then
-    printf '[FAIL] %s records no output_path\n' "$task_id"
-    task_bad=1
+  if [ "$REQUIRE_EVIDENCE" -eq 1 ] && [ ! -f "$path" ]; then
+    printf '[FAIL] %s nonexistent output_path: %s (--require-evidence)\n' "$task_id" "$path"; task_bad=1
   fi
   if [ "$task_bad" -eq 0 ]; then
-    printf '[OK] %s has verified terminal outcome and criterion\n' "$task_id"
+    printf '[OK] %s has a verified terminal outcome and its report\n' "$task_id"
     PASSED=$((PASSED + 1))
   fi
 }
 
-# field10 (integrated children) and field11 (notas) are delimiter-safe.
-# shellcheck disable=SC2034
-while IFS="$SEP" read -r kind task_id field1 field2 field3 field4 field5 field6 field7 field8 field9 field10 field11; do
+while IFS="$SEP" read -r kind task_id f1 f2 f3 f4 f5 f6 f7 f8; do
   [ -n "$kind" ] || continue
   if [ "$kind" = "TASK" ]; then
-    estado=$field2
-    outcome=$field3
-    runtime=$field4
-    runtime_is_null=$field5
-    criterion=$field6
-    path=$field7
-    output_is_null=$field8
-    evidence_count=$field9
-    integrated=$field10
-    notas=$field11
-    TASKS=$((TASKS + 1))
-    task_bad=0
-    if [ "$ALLOW_DEGRADED" -eq 1 ]; then
-      case "$estado" in
-        verified)
-          check_verified
-          ;;
-        failed|blocked|partial|cancelled|interrupted)
-          if [ -z "$notas" ]; then
-            printf '[FAIL] %s in estado %s requires non-empty notas with the reason/cause\n' "$task_id" "$estado"
-            task_bad=1
-          fi
-          if [ -z "$criterion" ]; then
-            printf '[FAIL] %s records no criterion\n' "$task_id"
-            task_bad=1
-          fi
-          if [ "$task_bad" -eq 0 ]; then
-            printf '[OK] %s has degraded terminal outcome (%s) with reason in notas\n' "$task_id" "$estado"
-            PASSED=$((PASSED + 1))
-          fi
-          ;;
-        pending|launching|running|awaiting-approval|outcome-unknown)
-          printf '[FAIL] %s in an active estado not allowed at close (estado: %s)\n' "$task_id" "$estado"
-          task_bad=1
-          ;;
-        *)
-          printf '[FAIL] %s in a non-terminal estado for degraded close (estado: %s)\n' "$task_id" "$estado"
-          task_bad=1
-          ;;
-      esac
-    else
-      if [ "$estado" != "verified" ]; then
-        printf '[FAIL] %s is not in local estado verified (estado: %s)\n' "$task_id" "$estado"
-        task_bad=1
-      fi
-      check_verified
-    fi
-    FAILS=$((FAILS + task_bad))
-    if [ "$REQUIRE_EVIDENCE" -eq 1 ] && [ "$output_is_null" != "1" ] && [ -n "$path" ]; then
-      case "$path" in
-        '!OUTSIDE!'*)
-          printf '[FAIL] %s output_path escapes the workspace root: %s\n' "$task_id" "${path#'!OUTSIDE!'}"
-          FAILS=$((FAILS + 1)); PATH_FAILURES=$((PATH_FAILURES + 1)); continue ;;
-        /*|[A-Za-z]:[/\\]*) resolved=$path ;;
-        *) resolved=$WS_PHYS/$path ;;
-      esac
-      if [ "$estado" = "verified" ] && [ ! -f "$resolved" ]; then
-        printf '[FAIL] %s nonexistent output_path: %s (--require-evidence)\n' "$task_id" "$path"
-        FAILS=$((FAILS + 1)); PATH_FAILURES=$((PATH_FAILURES + 1))
-      fi
-    fi
-  elif [ "$kind" = "EVIDENCE" ]; then
-    evidence_criterion=$field1
-    evidence_path=$field2
-    evidence_task_kind=$field3
-    expected_children=$field4
-    evidence_bad=0
-    case "$evidence_path" in
-      '!OUTSIDE!'*)
-        printf '[FAIL] %s evidence_refs escapes the workspace root: %s\n' "$task_id" "${evidence_path#'!OUTSIDE!'}"
-        FAILS=$((FAILS + 1)); PATH_FAILURES=$((PATH_FAILURES + 1)); continue ;;
-      /*|[A-Za-z]:[/\\]*) resolved=$evidence_path ;;
-      *) resolved=$WS_PHYS/$evidence_path ;;
+    estado=$f1; outcome=$f2; runtime=$f3; runtime_is_null=$f4
+    path=$f6; evidence_count=$f7; notas=$f8
+    TASKS=$((TASKS + 1)); task_bad=0
+    case "$estado" in
+      verified) check_verified ;;
+      failed|blocked|partial|cancelled|interrupted)
+        if [ "$ALLOW_DEGRADED" -eq 0 ]; then
+          printf '[FAIL] %s is not in local estado verified (estado: %s)\n' "$task_id" "$estado"; task_bad=1
+        elif [ -z "$notas" ]; then
+          printf '[FAIL] %s in estado %s requires non-empty notas with the reason\n' "$task_id" "$estado"; task_bad=1
+        else
+          printf '[OK] %s has degraded terminal outcome (%s) with reason in notas\n' "$task_id" "$estado"
+          PASSED=$((PASSED + 1))
+        fi ;;
+      *)
+        printf '[FAIL] %s in an active estado not allowed at close (estado: %s)\n' "$task_id" "$estado"; task_bad=1 ;;
     esac
-    if [ ! -f "$resolved" ]; then
-      if [ "$REQUIRE_EVIDENCE" -eq 1 ]; then
-        printf '[FAIL] %s nonexistent evidence_refs: %s (--require-evidence)\n' "$task_id" "$evidence_path"
-      else
-        printf '[FAIL] %s nonexistent or unreadable evidence_refs: %s\n' "$task_id" "$evidence_path"
-      fi
-      FAILS=$((FAILS + 1)); PATH_FAILURES=$((PATH_FAILURES + 1)); evidence_bad=1
-    elif ! CRITERION="$evidence_criterion" EXPECTED_CHILDREN="$expected_children" awk "$_VAL_LIB
-"'
-      {
-        if (FNR == 1 && substr($0, 1, 3) == "\357\273\277") $0 = substr($0, 4)   # strip UTF-8 BOM
-        line = $0; sub(/\r$/, "", line); line = strip_comment(line)
-        if (index(line, "\t")) { bad = 1; next }
-        # A tab is already rejected above, so only spaces can lead a comment line.
-        if (trim(line) == "" || line ~ /^ *#/) next
-        if (line !~ /^[A-Za-z_][A-Za-z0-9_]*:[ \t]*/) { bad = 1; next }
-        key = line; sub(/:.*/, "", key)
-        raw = line; sub(/^[A-Za-z_][A-Za-z0-9_]*:[ \t]*/, "", raw)
-        if (key != "criterion" && key != "result" && key != "observed" && key != "subagent_results_integrated") { bad = 1; next }
-        if (seen[key]++) { bad = 1; next }
-        if (key == "subagent_results_integrated") {
-          if (!list_items(raw, LIST_ITEM)) { bad = 1; next }
-          integration_n = LIST_N
-          for (i = 1; i <= LIST_N; i++) {
-            if (integration_seen[LIST_ITEM[i]]++) bad = 1
-            integration[LIST_ITEM[i]] = 1
-          }
-        } else {
-          if (!parse_scalar(raw, "")) { bad = 1; next }
-          value[key] = PVAL
-        }
-      }
-      END {
-        if (!seen["criterion"] || !seen["result"] || !seen["observed"]) bad = 1
-        if (value["criterion"] != ENVIRON["CRITERION"]) bad = 1
-        if (value["result"] != "pass") bad = 1
-        if (trim(value["observed"]) == "") bad = 1
-        expected_count = split(ENVIRON["EXPECTED_CHILDREN"], expected_item, ",")
-        if (ENVIRON["EXPECTED_CHILDREN"] != "") {
-          for (i = 1; i <= expected_count; i++) expected[expected_item[i]] = 1
-          if (!seen["subagent_results_integrated"] || integration_n != expected_count) bad = 1
-          for (i = 1; i <= expected_count; i++) if (!(expected_item[i] in integration)) bad = 1
-          for (i in integration) if (!(i in expected)) bad = 1
-        }
-        if (bad) exit 1
-        exit 0
-      }
-    ' "$resolved"; then
-      if [ "$evidence_task_kind" = "worker_session" ] && [ -n "$expected_children" ]; then
-        printf '[FAIL] %s evidence does not confirm criterion/result/observed nor integrate every verified child: %s\n' "$task_id" "$evidence_path"
-      else
-        printf '[FAIL] %s evidence does not prove criterion/result/observed: %s\n' "$task_id" "$evidence_path"
-      fi
-      FAILS=$((FAILS + 1)); evidence_bad=1
-    fi
-    if [ "$evidence_bad" -eq 0 ]; then
+    FAILS=$((FAILS + task_bad))
+  elif [ "$kind" = "EVIDENCE" ]; then
+    # Evidence is a gate only for verified tasks; degraded tasks may lack it.
+    estado=$f1; criterion=$f2; evidence_path=$f3
+    [ "$estado" = "verified" ] || continue
+    if [ ! -f "$evidence_path" ]; then
+      printf '[FAIL] %s nonexistent evidence_refs: %s\n' "$task_id" "$evidence_path"
+      FAILS=$((FAILS + 1))
+    elif reason=$(sh "$SCRIPT_DIR/check_evidence.sh" "$evidence_path" "$criterion"); then
       printf '[OK] %s evidence_refs confirms criterion: %s\n' "$task_id" "$evidence_path"
       PASSED=$((PASSED + 1))
+    else
+      printf '[FAIL] %s evidence does not prove criterion/result/observed: %s (%s)\n' "$task_id" "$evidence_path" "${reason#\[FAIL\] }"
+      FAILS=$((FAILS + 1))
     fi
   fi
 done <<EOF
@@ -411,14 +159,6 @@ EOF
 if [ "$TASKS" -eq 0 ]; then
   printf '[FAIL] ledger with no tasks to close\n'
   FAILS=$((FAILS + 1))
-fi
-if [ "$REQUIRE_EVIDENCE" -eq 1 ] && [ "$PATH_FAILURES" -eq 0 ] && [ "$FAILS" -eq 0 ]; then
-  if [ "$ALLOW_DEGRADED" -eq 1 ]; then
-    printf '[OK] every required output_path and evidence_refs path exists as a file\n'
-  else
-    printf '[OK] every output_path and evidence_refs path exists as a file\n'
-  fi
-  PASSED=$((PASSED + 1))
 fi
 printf 'TOTAL: %d passed, %d failed\n' "$PASSED" "$FAILS"
 [ "$FAILS" -eq 0 ]

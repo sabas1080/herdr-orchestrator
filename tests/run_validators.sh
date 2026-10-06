@@ -22,7 +22,11 @@ setf() {
     cur == id && index($0, "    " f ":") == 1 { print "    " f ": " v; next }
     { print }' "$C/raw.yaml" > "$C/raw.tmp" && mv "$C/raw.tmp" "$C/raw.yaml"
 }
-render() { sed -e "s#@WS@#$WS#g" -e "s#@WT@#$WT#g" "$C/raw.yaml" > "$WS/ledger.yaml"; }
+# render: YAML-escape backslashes in the paths, then sed-escape \, # and & for the replacement
+render() {
+  _ws=$(printf '%s' "$WS" | sed -e 's/\\/\\\\/g' -e 's/[\\#&]/\\&/g'); _wt=$(printf '%s' "$WT" | sed -e 's/\\/\\\\/g' -e 's/[\\#&]/\\&/g')
+  sed -e "s#@WS@#$_ws#g" -e "s#@WT@#$_wt#g" "$C/raw.yaml" > "$WS/ledger.yaml"
+}
 dag() { render; (cd "$WS" && sh "$SCRIPTS/validate_dag.sh" ledger.yaml); }
 closed() { render; (cd "$WS" && sh "$SCRIPTS/validate_ledger_closed.sh" ledger.yaml "$@"); }
 # evidence TASK CRITERION [RESULT]: write report + evidence for TASK in the case workspace
@@ -140,7 +144,64 @@ mk quoted-criterion
 setf W1 criterion '"the \\"README\\" lists a:b"'   # awk -v turns \\ into \
 check dag-quoted-criterion 0 "TOTAL: " dag
 
-# ---- validate_ledger_closed.sh cases are appended by Task 2 ----------------
+# ---- check_evidence.sh -----------------------------------------------------
+mk evidence-unit; render; evidence W1 'docs/a/README.md exists'
+check ev-pass 0 "" sh "$SCRIPTS/check_evidence.sh" "$WS/.herdr-orch/r1/W1/evidence.yml" 'docs/a/README.md exists'
+check ev-wrong-criterion 1 "[FAIL]" sh "$SCRIPTS/check_evidence.sh" "$WS/.herdr-orch/r1/W1/evidence.yml" 'something else'
+evidence W1 'docs/a/README.md exists' fail
+check ev-result-fail 1 "result" sh "$SCRIPTS/check_evidence.sh" "$WS/.herdr-orch/r1/W1/evidence.yml" 'docs/a/README.md exists'
+check ev-missing-file 1 "missing" sh "$SCRIPTS/check_evidence.sh" "$WS/nope.yml" 'x'
+check ev-usage 2 "" sh "$SCRIPTS/check_evidence.sh"
+
+# ---- validate_ledger_closed.sh ----------------------------------------------
+mk closed-valid; render
+evidence W1 'docs/a/README.md exists'; evidence W2 'docs/b/README.md exists'
+check closed-valid 0 "TOTAL: " closed --require-evidence
+
+mk closed-bad-evidence; render
+evidence W1 'docs/a/README.md exists'; evidence W2 'wrong criterion'
+check closed-bad-evidence 1 "evidence does not prove" closed --require-evidence
+
+mk closed-missing-evidence; render
+evidence W1 'docs/a/README.md exists'
+check closed-missing-evidence 1 "nonexistent evidence_refs" closed --require-evidence
+
+mk closed-missing-report; render
+evidence W1 'docs/a/README.md exists'; evidence W2 'docs/b/README.md exists'
+rm "$WS/.herdr-orch/r1/W2/report.md"
+check closed-missing-report 1 "nonexistent output_path" closed --require-evidence
+
+mk degraded-ok
+setf W2 estado '"failed"'; setf W2 execution_outcome '"failed"'; setf W2 notas '"worker crashed; no files written"'
+render; evidence W1 'docs/a/README.md exists'
+check closed-degraded-ok 0 "TOTAL: " closed --require-evidence --allow-degraded
+check closed-degraded-strict 1 "is not in local estado verified" closed --require-evidence
+
+mk active-at-close
+setf W2 estado '"running"'; setf W2 execution_outcome '"unknown"'; setf W2 runtime_status '"working"'
+render; evidence W1 'docs/a/README.md exists'
+check closed-active-at-close 1 "active estado" closed --require-evidence --allow-degraded
+
+mk closed-worktree worktree; render
+evidence W1 'docs/a/README.md exists'; evidence W2 'docs/a/README.md exists in the worktree'
+check closed-worktree 0 "TOTAL: " closed --require-evidence
+
+mk closed-dag-fail
+setf W1 estado '"pending"'; setf W1 execution_outcome '"unknown"'; setf W1 dependencias '["W2"]'
+setf W2 estado '"pending"'; setf W2 execution_outcome '"unknown"'; setf W2 dependencias '["W1"]'
+check closed-dag-fail 1 "the DAG gate rejected the ledger" closed
+
+mk closed-quoted-criterion
+setf W1 criterion '"the \\"README\\" lists a:b"'   # awk -v turns \\ into \
+render; evidence W2 'docs/b/README.md exists'
+mkdir -p "$WS/.herdr-orch/r1/W1"; printf '# r\n' > "$WS/.herdr-orch/r1/W1/report.md"
+printf 'criterion: "the \\"README\\" lists a:b"\nresult: "pass"\nobserved: "ok"\n' > "$WS/.herdr-orch/r1/W1/evidence.yml"
+check closed-quoted-criterion 0 "TOTAL: " closed --require-evidence
+
+# workspace path containing a backslash must survive the awk hand-off
+C=$TMP/bs; mkdir -p "$C/ws/a\\b" "$C/wt"; cp "$FIX/valid.yaml" "$C/raw.yaml"
+WS=$(cd "$C/ws/a\\b" && pwd -P); WT=$(cd "$C/wt" && pwd -P)
+check dag-backslash-workspace 0 "TOTAL: " dag
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAILS"
 [ "$FAILS" -eq 0 ]
