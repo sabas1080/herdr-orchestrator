@@ -580,7 +580,7 @@ resp pane_close '' 1 "$(herr pane_not_found)"
 check teardown-already 0 "already closed" orch teardown --confirm
 check teardown-already-not-fail 0 "" sh -c "! (cd '$WS' && PATH='$FAKE_BIN':\$PATH HERDR_ENV=1 HERDR_PANE_ID=w1:p1 sh '$ORCH' teardown --confirm 2>&1 | grep -q 'fake')"
 resp pane_close '' 1 "$(herr internal_error)"
-check teardown-other-err 0 "internal_error" orch teardown --confirm
+check teardown-other-err 1 "internal_error" orch teardown --confirm
 check teardown-badarg 2 "" orch teardown --run
 
 setup_run suggest
@@ -591,6 +591,52 @@ check suggest-bullets 0 "suggest-count=2" orch suggest-count "$WS/bul.md"
 printf 'tiny task\n' > "$WS/tiny.md"
 check suggest-tiny 0 "suggest-count=1" orch suggest-count "$WS/tiny.md"
 check suggest-nofile 2 "" orch suggest-count "$WS/nope.md"
+
+# ---- Task 7 fix round 1 ------------------------------------------------------
+setup_run fix9-close-env
+done_task W1 1
+rm -rf "$C/scripts"; cp -R "$SCRIPTS" "$C/scripts"; rm -f "$C/scripts/check_evidence.sh"
+check fix9-close-rc2 2 "ERROR: missing" sh -c "cd '$WS' && PATH='$FAKE_BIN':\$PATH HERDR_ENV=1 HERDR_PANE_ID=w1:p1 sh '$C/scripts/orch.sh' close"
+sed 's|^    directory: .*|    directory: "/nonexistent/ws"|' "$WS/.herdr-orch/t/ledger.yaml" > "$C/l.yaml" && cp "$C/l.yaml" "$WS/.herdr-orch/t/ledger.yaml"
+check fix9-close-nows 2 "run.workspace.directory missing" orch close
+
+setup_run fix9-moved
+resp agent_list "{\"result\":{\"agents\":[{\"name\":\"$N1\",\"agent_status\":\"idle\",\"pane_id\":\"w1:p7\"},{\"name\":\"$N2\",\"agent_status\":\"idle\",\"pane_id\":\"w1:p3\"}],\"type\":\"agent_list\"}}"
+check fix9-dry-live 0 "would close pane w1:p7" orch teardown
+check fix9-moved 0 "closed pane w1:p7 ($N1, moved from w1:p2)" orch teardown --confirm
+check fix9-moved-calls 0 "" sh -c "grep -q '^pane close w1:p7' '$FAKE_HERDR_DIR/calls.log' && ! grep -q '^pane close w1:p2' '$FAKE_HERDR_DIR/calls.log'"
+check fix9-moved-row 0 "w1:p7" cat "$WS/.herdr-orch/t/workers.tsv"
+
+setup_run fix9-gone
+resp agent_list '{"result":{"agents":[],"type":"agent_list"}}'
+resp pane_close '' 1 "$(herr pane_not_found)"
+check fix9-gone-closed 0 "already closed" orch teardown --confirm
+
+setup_run fix9-fail
+resp pane_close '' 1 "$(herr internal_error)"
+check fix9-fail-rc 1 "could not close" orch teardown --confirm
+setup_run fix9-wtfail
+awk -F'\t' -v OFS='\t' 'NR==2 { $8 = "/tmp/wt-x" } { print }' "$WS/.herdr-orch/t/workers.tsv" > "$C/w.tsv" && cp "$C/w.tsv" "$WS/.herdr-orch/t/workers.tsv"
+resp worktree_remove '' 1 "$(herr worktree_dirty)"
+check fix9-wtfail-rc 1 "was left open too" orch teardown --confirm --remove-worktrees
+
+setup_run fix9-warn
+orch task add --id W1 --worker 1 --criterion c --scope docs/a >/dev/null
+resp agent_prompt "$(agent_json "$N1" working)"
+orch dispatch --task W1 --prompt-file "$WS/task.md" >/dev/null
+check fix9-warn-dry 0 "WARNING: task W1 ($N1) is running" orch teardown
+check fix9-warn-confirm 0 "WARNING: task W1 ($N1) is running" orch teardown --confirm
+
+setup_run fix9-orchpane
+resp agent_list "{\"result\":{\"agents\":[{\"name\":\"$N1\",\"agent_status\":\"idle\",\"pane_id\":\"w1:p1\"},{\"name\":\"$N2\",\"agent_status\":\"idle\",\"pane_id\":\"w1:p3\"}],\"type\":\"agent_list\"}}"
+check fix9-orchpane-skip 0 "skipped" orch teardown --confirm
+check fix9-orchpane-not-closed 0 "" sh -c "! grep -q '^pane close w1:p1' '$FAKE_HERDR_DIR/calls.log'"
+
+setup_run fix9-suggest
+printf 'tiny task\n' > "$WS/tiny.md"
+check fix9-suggest-noenv 0 "suggest-count=1" sh -c "cd '$WS' && HERDR_ENV=0 PATH='$FAKE_BIN':\$PATH sh '$ORCH' suggest-count '$WS/tiny.md'"
+resp agent_list "{\"result\":{\"agents\":[{\"name\":\"$N1\",\"agent_status\":\"working\",\"pane_id\":\"w1:p2\"},{\"name\":\"$N2\",\"agent_status\":\"working\",\"pane_id\":\"w1:p3\"}],\"type\":\"agent_list\"}}"
+check fix9-suggest-note 0 "note=no idle workers" orch suggest-count "$WS/tiny.md"
 
 # ---- orch.sh subcommand cases are appended by Tasks 4-7 --------------------
 
