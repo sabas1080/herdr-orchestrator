@@ -519,6 +519,34 @@ check fix7-blocked-redispatch 0 "completed" orch dispatch --task W1 --prompt-fil
 unknown_task fix7-other agent_start_failed
 check fix7-other-notas 0 "send uncertain: agent_start_failed" st W1 notas
 
+# ---- Task 6 fix round 3 -------------------------------------------------------
+blocked_then_redispatch() { # CASE PROMPT_ERR: blocked dispatch, reconcile -> pending, redispatch
+  unknown_task "$1" agent_blocked
+  resp agent_get "$(agent_json "$N1" idle)"; resp agent_read 'unrelated scrollback'
+  orch reconcile --task W1 >/dev/null
+  resp agent_prompt '' 1 "$(herr "$2")"
+  orch dispatch --task W1 --prompt-file "$WS/task.md" >/dev/null
+}
+blocked_then_redispatch fix8-timeout timeout
+check fix8-redispatch-running 0 "running" st W1
+resp agent_get "$(agent_json "$N1" working)"
+resp agent_wait '' 1 "$(herr timeout)"
+orch wait --task W1 --timeout 1 >/dev/null
+resp agent_get "$(agent_json "$N1" idle)"
+check fix8-reconcile-completed 0 "completed" orch reconcile --task W1
+check fix8-reconcile-notas 0 "delivered earlier" st W1 notas
+
+blocked_then_redispatch fix8-stalled agent_prompt_stalled
+resp agent_get "$(agent_json "$N1" idle)"
+check fix8-stalled-completed 0 "completed" orch reconcile --task W1
+
+unknown_task fix8-rtreset agent_blocked
+(cd "$WS" && SKILL_SCRIPTS=$SCRIPTS && . "$SCRIPTS/lib/orch_common.sh" && . "$SCRIPTS/lib/orch_ledger.sh" && resolve_run t && with_lock ledger_update W1 'runtime_status="working"')
+resp agent_get "$(agent_json "$N1" idle)"; resp agent_read 'unrelated scrollback'
+check fix8-rtreset-pending 0 "pending" orch reconcile --task W1
+check fix8-rtreset-null 0 "" grep -q 'runtime_status: null' "$WS/.herdr-orch/t/ledger.yaml"
+check fix8-rtreset-valid 0 "TOTAL: " sh -c "cd '$WS' && sh '$SCRIPTS/validate_dag.sh' .herdr-orch/t/ledger.yaml"
+
 # ---- orch.sh subcommand cases are appended by Tasks 4-7 --------------------
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAILS"

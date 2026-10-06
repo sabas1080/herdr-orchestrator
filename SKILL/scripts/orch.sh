@@ -500,6 +500,11 @@ sub_wait() {
 }
 
 # ---- reconcile -----------------------------------------------------------------
+# reconcile_write TASK NEW RT NOTE (lock held): set_state; a return to pending also clears runtime_status
+reconcile_write() {
+  set_state "$1" "$2" "$3" "$4" || return 1
+  [ "$2" != pending ] || ledger_update "$1" 'runtime_status=null'
+}
 sub_reconcile() {
   _rc_run=""; _rc_t=""
   while [ $# -gt 0 ]; do
@@ -527,6 +532,8 @@ sub_reconcile() {
           printf 'reconcile: %s unchanged (pane read failed: %s)\n' "$_rc_t" "$H_ERR"; exit 3
         fi
         _rc_rtold=$(ledger_get "$_rc_t" runtime_status); _rc_notas=$(ledger_get "$_rc_t" notas)
+        # only the current attempt counts: text after the last "prompt not delivered" reset
+        case "$_rc_notas" in *"reconciled: prompt not delivered"*) _rc_notas=${_rc_notas##*"reconciled: prompt not delivered"} ;; esac
         if printf '%s\n' "$H_OUT" | grep -F -- "$(task_marker "$_rc_t")" >/dev/null; then
           _rc_new=completed; _rc_note="reconcile: prompt seen, no report yet"
         elif case "$_rc_notas" in *"prompt not sent"*) true ;;
@@ -541,7 +548,7 @@ sub_reconcile() {
     printf 'reconcile: %s stays %s (observed %s; %s -> %s is not allowed)\n' "$_rc_t" "$_rc_state" "$_rc_st" "$_rc_state" "$_rc_new"
     exit 3
   fi
-  with_lock set_state "$_rc_t" "$_rc_new" "$_rc_rt" "$_rc_note"
+  with_lock reconcile_write "$_rc_t" "$_rc_new" "$_rc_rt" "$_rc_note"
   printf 'reconcile: %s -> %s (agent %s)\n' "$_rc_t" "$_rc_new" "$_rc_st"
   [ "$_rc_new" != awaiting-approval ] || exit 5
 }
