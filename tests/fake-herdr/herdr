@@ -1,0 +1,22 @@
+#!/bin/sh
+# Fake herdr for tests. Serves canned responses from $FAKE_HERDR_DIR/responses.
+# Key = "$1_$2" (agent_list, pane_split, status_--json, agent_ for bare `herdr agent`).
+# The Nth call of a key uses KEY.N when any of KEY.N, KEY.N.rc, KEY.N.err exists,
+# else KEY. KEY[.N].rc holds the exit code (default 0), KEY[.N].err the stderr.
+# Every call is appended to $FAKE_HERDR_DIR/calls.log.
+set -u
+d=${FAKE_HERDR_DIR:?FAKE_HERDR_DIR not set}
+key="${1:-}_${2:-}"
+printf '%s\n' "$*" >> "$d/calls.log"
+cnt=$d/.count.$key
+n=$(( $(cat "$cnt" 2>/dev/null || echo 0) + 1 ))
+printf '%s\n' "$n" > "$cnt"
+base=$d/responses/$key
+if [ -e "$base.$n" ] || [ -e "$base.$n.rc" ] || [ -e "$base.$n.err" ]; then base=$base.$n; fi
+if [ ! -e "$base" ] && [ ! -e "$base.rc" ] && [ ! -e "$base.err" ]; then
+  printf '{"error":{"code":"fake_unconfigured","message":"no fake response for %s"}}\n' "$key" >&2
+  exit 1
+fi
+[ -e "$base" ] && cat "$base"
+[ -e "$base.err" ] && cat "$base.err" >&2
+exit "$(cat "$base.rc" 2>/dev/null || echo 0)"
