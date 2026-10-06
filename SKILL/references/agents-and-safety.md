@@ -35,7 +35,7 @@ orch.sh init-run --worker claude --worker claude --agent-arg --permission-mode -
 
 ## Approvals
 
-- A `blocked` worker waits for the human (H8). `dispatch`/`wait`/`reconcile` exit 5 and send a notification with sound `request`. Tell the user which pane needs attention, then `wait` again (or `reconcile` when `dispatch` reported "not sent").
+- A `blocked` worker waits for the human (H8). `dispatch`/`wait` exit 5 and send a notification with sound `request`; `reconcile` also exits 5 but sends no notification. Tell the user which pane needs attention, then `wait` again (or `reconcile` when `dispatch` reported "not sent").
 - Never send keys to approve, never answer approval or trust dialogs, never use `--trust-repository` or `--force` without the user's explicit say-so (H10).
 
 ## Untrusted content

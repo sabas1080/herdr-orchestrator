@@ -41,7 +41,7 @@ orch.sh task add --id W1 --worker 1 --scope docs/a --criterion "docs/a/README.md
 orch.sh task add --id W3 --worker 1 --scope docs/a/api --deps W1 --criterion "…"
 ```
 
-`--worker` is an ordinal (`1`, `01`) or an agent name from `orch.sh pool`. `--scope` and `--deps` take comma-separated lists. The ledger is validated on every add. Exit `0`: `task W1 added -> <agent>`. Exit `2`: bad usage, unknown worker, duplicate id, or `[FAIL]` from the validator (the ledger is left unchanged): add `--deps` or split the scopes.
+`--worker` is an ordinal (`1`, `01`) or an agent name from `orch.sh pool`. `--scope` and `--deps` take comma-separated lists. The ledger is validated on every add. Exit `0`: `task W1 added -> <agent>`. Exit `1`: the validator rejected the task (`[FAIL]` lines; the ledger is left unchanged): add `--deps` or split the scopes. Exit `2`: bad usage, unknown worker or duplicate id.
 
 `orch.sh pool` shows workers, herdr status and each worker's open task (`ORD NAME KIND STATUS PANE TASK ESTADO`); `STATUS=gone` means the agent no longer exists.
 
@@ -61,6 +61,8 @@ Preconditions: task `pending`, dependencies `verified`, worker `idle` or `done`,
 | Agent already settled | `dispatch: W1 completed (idle); next: …` | `0` |
 | Agent blocked after the send | `dispatch: W1 awaiting approval in pane …; ask the user` | `5` |
 | herdr refused before sending (approval dialog) | `dispatch: W1 not sent; … run: orch.sh reconcile --task W1` | `5` |
+| herdr `timeout` on the send (activity seen, not settled) | `dispatch: W1 running on <agent>` | `0` |
+| Any other settled status | `dispatch: W1 outcome-unknown (status …); run: orch.sh reconcile …` | `3` |
 | Send error or stalled | `dispatch: W1 outcome-unknown (<code>); do not resend; run: orch.sh reconcile …` | `3` |
 
 Dispatch records `prompt sent`, `prompt not sent` or `send uncertain: <code>` in the task's `notas`; `reconcile` uses it. A task stuck in `launching` (a dispatch that did not finish) is not re-dispatched: run `reconcile`. With `--wait`, a running task continues as `wait` and returns its exit code.
@@ -124,7 +126,7 @@ Two workers, two disjoint documentation tasks:
 $ orch.sh preflight
 …
 gate=ready
-$ orch.sh init-run --run-id 20261006-docs --worker claude --worker codex
+$ orch.sh init-run --run-id 20261006-docs --worker claude --worker codex:Glacielle
 started  [01] Vermithrax -> w01-vermithrax-xxxx (claude, w1:p2)
 started  [02] Glacielle -> w02-glacielle-xxxx (codex, w1:p3)
 run 20261006-docs ready: /abs/repo/.herdr-orch/20261006-docs

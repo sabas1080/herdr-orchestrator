@@ -1,6 +1,6 @@
 # Ledger schema 4, state machine and validators
 
-The ledger `.herdr-orch/<run>/ledger.yaml` is written only by `orch.sh`; never edit it by hand. Spanish field names (`dependencias`, `scope_escritura`, `estado`, `notas`) are kept on purpose. Unknown keys are rejected.
+The ledger `.herdr-orch/<run>/ledger.yaml` is written only by `orch.sh`; never edit it by hand. `task add` briefly keeps a `ledger.yaml.bak` to roll back a rejected task and removes it afterwards. Spanish field names (`dependencias`, `scope_escritura`, `estado`, `notas`) are kept on purpose. Unknown keys are rejected.
 
 ## Schema
 
@@ -88,7 +88,7 @@ Active states: `launching`, `running`, `awaiting-approval`, `outcome-unknown`. T
 | any non-terminal | `cancelled` / `failed` / `partial` / `blocked` / `interrupted` | `task set` | `--notas` required |
 | terminal | none | none | no transitions; reassignment creates a new task |
 
-`execution_outcome` becomes `succeeded` when the task reaches `completed`, `interrupted`/`cancelled`/`failed` with the matching terminal state, and `unknown` for `pending`, `launching`, `running`, `awaiting-approval`, `outcome-unknown`. `verify` changes only `estado`. `completed` requires `execution_outcome: succeeded`.
+`execution_outcome` becomes `succeeded` when the task reaches `completed`, `interrupted`/`cancelled`/`failed` with the matching terminal state, and `unknown` for `pending`, `launching`, `running`, `awaiting-approval`, `outcome-unknown`. `verify` changes only `estado` and `last_state_at`. `partial` and `blocked` (via `task set`) leave `execution_outcome` unchanged. `completed` requires `execution_outcome: succeeded`.
 
 ### Dispatch notes and the reconcile delivery rule
 

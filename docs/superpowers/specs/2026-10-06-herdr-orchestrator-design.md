@@ -253,7 +253,7 @@ POSIX `sh`. Preconditions checked on every subcommand: `HERDR_ENV=1`, `herdr` an
 | Timeout | exit 3 | `outcome-unknown`; `reconcile` | Release scope; resend |
 | Stuck | exit 4 (advisory) | Decide: keep waiting or Degraded D | Kill the pane without approval |
 | Name collision | live agent with the same name outside this run | Fail closed; choose another title or run id | Rename the foreign agent |
-| Pane moved | recorded `pane_id` gone, agent name live | Refresh `pane_id` from `agent get` into `workers.tsv` and ledger | Use the old pane ID |
+| Pane moved | recorded `pane_id` gone, agent name live | `init-run` reuse and `teardown` refresh `workers.tsv` by agent name; the ledger's `pane_id` is informational and may be stale (dispatch/wait messages may show the old id) | Use the old pane ID |
 | Pane closed externally | `agent_not_found` / `pool` shows `gone` | Active task → `interrupted`; ask before recreating | Assume the work finished |
 | Evidence gate fails | `verify` prints `[FAIL]` | Keep `completed`; ask the worker (continuation prompt) for the missing evidence | Write the evidence yourself |
 | Incomplete init | `INCOMPLETE`, exit 1 | Rerun `init-run` with the same `--run-id` | Create workers by hand |
