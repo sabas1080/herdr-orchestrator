@@ -83,6 +83,7 @@ sub_init_run() {
       --worker) [ $# -ge 2 ] || usage_die "--worker needs KIND[:Title]"; _ir_specs="$_ir_specs$2
 "; shift 2 ;;
       --agent-arg) [ $# -ge 2 ] || usage_die "--agent-arg needs a value"
+        case "$2" in '') usage_die "--agent-arg value must not be empty" ;; esac
         case "$2" in *'
 '*) usage_die "--agent-arg value must not contain a newline" ;; esac
         _ir_aargs="$_ir_aargs$2

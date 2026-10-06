@@ -146,7 +146,10 @@ check aa-space 0 "run t ready" orch init-run --run-id t --worker claude --agent-
 check aa-space-one-arg 0 "" sh -c "grep -qx 'ARG=a b' '$FAKE_HERDR_DIR/argv.log' && grep -qx 'ARG=--' '$FAKE_HERDR_DIR/argv.log' && ! grep -qx 'ARG=a' '$FAKE_HERDR_DIR/argv.log'"
 new_case init-no-agent-args
 check aa-none 0 "run t ready" orch init-run --run-id t --worker claude
-check aa-none-no-dashes 0 "" sh -c "grep '^agent start' '$FAKE_HERDR_DIR/calls.log' | grep -qv -- ' -- ' && ! grep '^agent start' '$FAKE_HERDR_DIR/calls.log' | grep -q -- ' -- '"
+check aa-none-no-dashes 0 "" sh -c "! grep '^agent start' '$FAKE_HERDR_DIR/calls.log' | grep -q -- ' -- '"
+new_case init-agent-arg-empty
+check aa-empty 2 "empty" orch init-run --run-id t --worker claude --agent-arg ''
+check aa-empty-no-start 0 "" sh -c "! grep -q '^agent start' '$FAKE_HERDR_DIR/calls.log'"
 check aa-missing-value 2 "--agent-arg" orch init-run --run-id t --worker claude --agent-arg
 
 new_case init
