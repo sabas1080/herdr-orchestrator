@@ -582,6 +582,82 @@ EOF
   printf '[OK] %s verified; report: %s\n' "$_vf_t" "$_vf_out"
 }
 
+# ---- close ---------------------------------------------------------------------
+sub_close() {
+  _cl_run=""; _cl_deg=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --allow-degraded) _cl_deg=1; shift ;;
+      --run) [ $# -ge 2 ] || usage_die "--run needs a value"; _cl_run=$2; shift 2 ;;
+      *) usage_die "close: unknown argument: $1" ;;
+    esac
+  done
+  require_run "$_cl_run"
+  _cl_ws=$(ledger_run_get workspace directory)
+  if [ "$_cl_deg" = 1 ]; then set -- --require-evidence --allow-degraded; else set -- --require-evidence; fi
+  _cl_out=$(cd "$_cl_ws" && sh "$SKILL_SCRIPTS/validate_ledger_closed.sh" "$LEDGER" "$@" 2>&1); _cl_rc=$?
+  # [FAIL] lines plus only the last TOTAL: line (the closure total; validate_dag prints one first)
+  printf '%s\n' "$_cl_out" | awk '/^\[FAIL\]/ { print } /^TOTAL:/ { t = $0 } END { if (t != "") print t }'
+  if [ "$_cl_rc" -eq 0 ]; then notify "run $RUN_ID closed" done
+  else notify "run $RUN_ID: close failed" request; fi
+  exit "$_cl_rc"
+}
+
+# ---- teardown ------------------------------------------------------------------
+# Only panes/worktrees recorded in this run's workers.tsv; never --force.
+sub_teardown() {
+  _td_run=""; _td_ok=0; _td_rmwt=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --confirm) _td_ok=1; shift ;;
+      --remove-worktrees) _td_rmwt=1; shift ;;
+      --run) [ $# -ge 2 ] || usage_die "--run needs a value"; _td_run=$2; shift 2 ;;
+      *) usage_die "teardown: unknown argument: $1" ;;
+    esac
+  done
+  require_run "$_td_run"
+  _td_rows=$(workers_rows)
+  if [ "$_td_ok" = 0 ]; then
+    printf '%s\n' "$_td_rows" | while IFS='	' read -r _o _n _t _k _w _p _d _x; do
+      [ -n "$_n" ] || continue
+      if [ "$_x" != - ] && [ "$_td_rmwt" = 1 ]; then printf 'would remove worktree %s (workspace %s, %s)\n' "$_x" "$_w" "$_n"
+      else printf 'would close pane %s (%s)\n' "$_p" "$_n"; fi
+    done
+    printf 'dry run: pass --confirm to apply (only panes/worktrees recorded by run %s)\n' "$RUN_ID"
+    return 0
+  fi
+  while IFS='	' read -r _o _n _t _k _w _p _d _x; do
+    [ -n "$_n" ] || continue
+    if [ "$_x" != - ] && [ "$_td_rmwt" = 1 ]; then
+      if hcall worktree remove --workspace "$_w"; then printf 'removed worktree %s\n' "$_x"
+      else printf 'kept worktree %s (%s); remove it yourself if intended\n' "$_x" "$H_ERR"; fi
+    elif hcall pane close "$_p"; then printf 'closed pane %s (%s)\n' "$_p" "$_n"
+    elif [ "$H_ERR" = pane_not_found ]; then printf 'pane %s (%s): already closed\n' "$_p" "$_n"
+    else printf 'pane %s (%s): could not close (%s)\n' "$_p" "$_n" "$H_ERR"; fi
+  done <<EOF
+$_td_rows
+EOF
+}
+
+# ---- suggest-count -------------------------------------------------------------
+# Never reads H_ERR: hcall runs inside $( ... ) here.
+sub_suggest_count() {
+  [ $# -eq 1 ] && [ -f "$1" ] || usage_die "suggest-count FILE"
+  _sc_words=$(wc -w < "$1" | tr -d ' ')
+  _sc_bullets=$(grep -cE '^[[:space:]]*([0-9]+[.)]|[-*])[[:space:]]' "$1" || true)
+  _sc_n=1
+  [ "$_sc_words" -lt 200 ] || _sc_n=2
+  [ "$_sc_words" -lt 500 ] || _sc_n=3
+  [ "$_sc_bullets" -lt 3 ] || [ "$_sc_n" -ge 2 ] || _sc_n=2
+  [ "$_sc_bullets" -lt 6 ] || _sc_n=3
+  _sc_idle=$( (require_run "" >/dev/null 2>&1 && hcall agent list &&
+      workers_rows | while IFS='	' read -r _o _n _r; do
+        printf '%s' "$H_OUT" | jq -r --arg n "$_n" '.result.agents[] | select((.name // "") == $n) | .agent_status'
+      done | grep -cE '^(idle|done)$') 2>/dev/null || true)
+  if [ -n "$_sc_idle" ] && [ "$_sc_idle" -gt 0 ] && [ "$_sc_n" -gt "$_sc_idle" ]; then _sc_n=$_sc_idle; fi
+  printf 'suggest-count=%s words=%s bullets=%s idle_workers=%s\n' "$_sc_n" "$_sc_words" "$_sc_bullets" "${_sc_idle:-unknown}"
+}
+
 # ---- dispatcher --------------------------------------------------------------
 cmd=${1:-help}
 [ $# -gt 0 ] && shift
@@ -598,5 +674,8 @@ case "$cmd" in
   wait) sub_wait "$@" ;;
   reconcile) sub_reconcile "$@" ;;
   verify) sub_verify "$@" ;;
+  close) sub_close "$@" ;;
+  teardown) sub_teardown "$@" ;;
+  suggest-count) sub_suggest_count "$@" ;;
   *) usage_text >&2; usage_die "unknown subcommand: $cmd" ;;
 esac

@@ -547,6 +547,51 @@ check fix8-rtreset-pending 0 "pending" orch reconcile --task W1
 check fix8-rtreset-null 0 "" grep -q 'runtime_status: null' "$WS/.herdr-orch/t/ledger.yaml"
 check fix8-rtreset-valid 0 "TOTAL: " sh -c "cd '$WS' && sh '$SCRIPTS/validate_dag.sh' .herdr-orch/t/ledger.yaml"
 
+# ---- Task 7: close / teardown / suggest-count ------------------------------
+done_task() { # verified task $1 on worker $2 in the current case
+  orch task add --id "$1" --worker "$2" --criterion "crit $1" --scope "docs/$1" >/dev/null
+  resp agent_prompt "$(agent_json x done)"
+  orch dispatch --task "$1" --prompt-file "$WS/task.md" >/dev/null
+  printf '# r\n' > "$WS/.herdr-orch/t/$1/report.md"
+  printf 'criterion: "crit %s"\nresult: "pass"\nobserved: "ok"\n' "$1" > "$WS/.herdr-orch/t/$1/evidence.yml"
+  orch verify --task "$1" >/dev/null
+}
+setup_run close-ok
+done_task W1 1; done_task W2 2
+check close-ok 0 "TOTAL: " orch close
+check close-one-total 0 "" sh -c "[ \$(PATH='$FAKE_BIN':\$PATH HERDR_ENV=1 HERDR_PANE_ID=w1:p1 sh -c \"cd '$WS' && sh '$ORCH' close\" 2>&1 | grep -c '^TOTAL:') -eq 1 ]"
+check close-notified 0 "" grep -q '^notification show' "$FAKE_HERDR_DIR/calls.log"
+check close-badarg 2 "" orch close --run
+
+setup_run close-pending
+done_task W1 1
+orch task add --id W2 --worker 2 --criterion c --scope docs/b >/dev/null
+check close-pending 1 "[FAIL]" orch close
+orch task set --task W2 --estado failed --notas 'worker crashed' >/dev/null
+check close-degraded 0 "TOTAL: " orch close --allow-degraded
+
+setup_run teardown
+check teardown-dry 0 "dry run" orch teardown
+check teardown-dry-no-close 0 "" sh -c "! grep -q '^pane close' '$FAKE_HERDR_DIR/calls.log'"
+check teardown-confirm 0 "closed pane w1:p3" orch teardown --confirm
+check teardown-two-closes 0 "" sh -c "[ \$(grep -c '^pane close' '$FAKE_HERDR_DIR/calls.log') -eq 2 ]"
+check teardown-no-force 0 "" sh -c "! grep '^pane close' '$FAKE_HERDR_DIR/calls.log' | grep -q -e --force -e --trust"
+resp pane_close '' 1 "$(herr pane_not_found)"
+check teardown-already 0 "already closed" orch teardown --confirm
+check teardown-already-not-fail 0 "" sh -c "! (cd '$WS' && PATH='$FAKE_BIN':\$PATH HERDR_ENV=1 HERDR_PANE_ID=w1:p1 sh '$ORCH' teardown --confirm 2>&1 | grep -q 'fake')"
+resp pane_close '' 1 "$(herr internal_error)"
+check teardown-other-err 0 "internal_error" orch teardown --confirm
+check teardown-badarg 2 "" orch teardown --run
+
+setup_run suggest
+awk 'BEGIN { for (i = 0; i < 600; i++) printf "word "; print "" }' > "$WS/big.md"
+check suggest-capped 0 "suggest-count=2" orch suggest-count "$WS/big.md"
+printf -- '- a\n- b\n- c\nshort\n' > "$WS/bul.md"
+check suggest-bullets 0 "suggest-count=2" orch suggest-count "$WS/bul.md"
+printf 'tiny task\n' > "$WS/tiny.md"
+check suggest-tiny 0 "suggest-count=1" orch suggest-count "$WS/tiny.md"
+check suggest-nofile 2 "" orch suggest-count "$WS/nope.md"
+
 # ---- orch.sh subcommand cases are appended by Tasks 4-7 --------------------
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAILS"
