@@ -14,7 +14,13 @@ A Claude Code skill. You keep talking to Claude in your herdr pane as usual; whe
 - it starts **worker agents** in sibling panes of your tab — `claude`, `codex`, `opencode` or any other kind herdr supports;
 - each worker gets a complete, self-contained task file and a folder it may write to;
 - Claude never does the work itself and never reads the workers' full transcripts — only their short reports — so its own context stays small;
-- a task counts as done only when the worker's evidence file proves the acceptance criterion.
+- a task counts as done only when the worker's evidence file (a three-line note: the criterion, `pass`/`fail`, and what was actually checked) proves the acceptance criterion.
+
+## Before you start
+
+- Run Claude Code **inside a herdr pane** (herdr sets `HERDR_ENV=1`); outside herdr the skill only proposes a plan.
+- Install the agent CLIs you want as workers (`claude`, `codex`, `opencode`…); herdr starts them in the new panes.
+- Install the skill (see [Install](#install)). Claude picks it up when you ask to orchestrate workers in herdr.
 
 ## How you use it
 
@@ -28,7 +34,7 @@ What you will see:
 
 1. Two new panes appear next to yours, labelled `[01] Vermithrax`, `[02] Pyreclaw`… (default names come from a dragon catalog).
 2. Each worker receives its task and starts working; you can watch or ignore them.
-3. If a worker stops to ask for an approval, Claude tells you which pane needs you and a herdr notification sounds. **You** answer it; Claude never does.
+3. If a worker stops to ask for an approval, Claude tells you which pane needs you and you get a herdr notification. **You** answer it; Claude never does.
 4. When everything is checked, Claude replies with a short report: what each worker did, whether its evidence passed, and anything that needs your attention.
 5. The worker panes stay open until you ask Claude to close them.
 
@@ -41,11 +47,11 @@ your pane (Claude, orchestrator)
   herdr CLI  --->  [01] worker pane   [02] worker pane   ...
         |
         v
-.herdr-orch/<run>/            (inside your project, git-ignored)
-    ledger.yaml               every task, its worker and its state
+.herdr-orch/<run>/            (inside your project, excluded via .git/info/exclude)
+    ledger.yaml               the run's record: every task, its worker and its state
     workers.tsv               which agent lives in which pane
     <task>/prompt.md          the task file the worker reads
-    <task>/report.md          the worker's short report (≤500 words)
+    <task>/report.md          the worker's short report (asked to stay within 500 words)
     <task>/evidence.yml       criterion · result · what was checked
 ```
 
@@ -61,7 +67,7 @@ One run goes through six steps:
 ## Guarantees
 
 - **Never answers for you.** Approval prompts and Claude's folder-trust dialog are always left to you.
-- **Never resends blindly.** If it is unclear whether a worker got its task, Claude reconciles first (`reconcile`) and only resends when the task provably never arrived.
+- **Never resends blindly.** If it is unclear whether a worker got its task, Claude first checks what actually happened in that pane (`reconcile`) and only resends when the task provably never arrived.
 - **Only touches what it created.** Closing panes or worktrees affects only this run's workers, never your pane or anything else, and only when you ask.
 - **No result without evidence.** "The agent went idle" is not success; only a passing evidence check is.
 - **Stays in herdr.** Outside a herdr pane it only proposes a plan; it doesn't pretend to run anything.
@@ -74,9 +80,9 @@ This repo is a fork of DragonJAR's [OpenCode-Orchestrator-Skill](https://github.
 | --- | --- | --- |
 | Runtime | OpenCode V2 server (HTTP API) | herdr terminal multiplexer (CLI) |
 | Workers | OpenCode sessions, each with ≥2 native subagents | Agents of any kind in sibling panes; their internal subagents are their business |
-| Seeing the work | Patched OpenCode TUI tabs | Real herdr panes, labelled `[NN] Name` |
+| Seeing the work | OpenCode TUI tabs (`attach-tabs`) | Real herdr panes, labelled `[NN] Name` |
 | Ledger | YAML schema 3 (sessions, `parentID`, locations) | YAML schema 4 (agent, pane, worktree, delivery evidence) |
-| Isolation | Disjoint write scopes | Disjoint scopes, or one git worktree per worker on request |
+| Isolation | Disjoint write scopes; overlaps serialized via DAG dependencies | The same, or one git worktree (a separate checkout of the repo) per worker on request |
 | Kept from the original | — | Orchestrator-never-implements, complete task prompts, written evidence gate, POSIX validators, fail-closed rules, dragon names |
 | Removed | — | HTTP/auth discovery, tabs patching, per-OS adapters, the two-subagent rule |
 
@@ -103,7 +109,7 @@ ln -s ~/.claude/skills/herdr-orchestrator-src/SKILL ~/.claude/skills/herdr-orche
 By default, workers start in your normal permission mode, so a Claude worker stops whenever it wants to edit a file or run a command, and waits for you. If you want them to work on their own, tell Claude which mode to start them in; it passes native arguments with `--agent-arg`:
 
 ```sh
-orch.sh init-run --worker claude --worker claude --agent-arg --permission-mode --agent-arg auto
+sh SKILL/scripts/orch.sh init-run --worker claude --worker claude --agent-arg --permission-mode --agent-arg auto
 ```
 
 Only do this when you want unattended workers. Also note that a folder Claude has never seen (a new repo or a worktree) shows Claude's folder-trust dialog once; answer it in that pane and ask Claude to continue — it reruns `init-run` with the same options.
@@ -134,7 +140,7 @@ The skill's own instructions are in [SKILL/SKILL.md](SKILL/SKILL.md); details in
 
 ```sh
 sh tests/run_validators.sh   # ledger validators
-sh tests/run_orch.sh         # orch.sh against a fake herdr (caps its own memory)
+sh tests/run_orch.sh         # orch.sh against a fake herdr (sets a memory cap when the shell allows it)
 sh tests/check_skill.sh      # skill structure and links
 ```
 
