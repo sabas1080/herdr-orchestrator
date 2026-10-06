@@ -1,0 +1,50 @@
+# W2 runs in a worktree (@WT@) with the same relative scope as W1: no conflict.
+schema_version: 4
+run:
+  run_id: "r1"
+  herdr:
+    server_version: "0.8.2"
+  workspace:
+    directory: "@WS@"
+    herdr_workspace_id: "w1"
+    herdr_tab_id: "w1:t1"
+  orchestrator:
+    pane_id: "w1:p1"
+    kind: "claude"
+tasks:
+  - task_id: "W1"
+    agent_name: "w01-vermithrax-ab12"
+    title: "[01] Vermithrax"
+    kind: "claude"
+    pane_id: "w1:p2"
+    worktree: null
+    directory: "@WS@"
+    dependencias: []
+    scope_escritura: ["docs/a", "@WS@/.herdr-orch/r1/W1"]
+    criterion: "docs/a/README.md exists"
+    output_path: "@WS@/.herdr-orch/r1/W1/report.md"
+    evidence_refs: ["@WS@/.herdr-orch/r1/W1/evidence.yml"]
+    estado: "verified"
+    runtime_status: "idle"
+    execution_outcome: "succeeded"
+    created_at: "2026-10-06T15:30:00Z"
+    last_state_at: "2026-10-06T15:40:00Z"
+    notas: ""
+  - task_id: "W2"
+    agent_name: "w02-glacielle-ab12"
+    title: "[02] Glacielle"
+    kind: "codex"
+    pane_id: "w2:p1"
+    worktree: "@WT@"
+    directory: "@WT@"
+    dependencias: []
+    scope_escritura: ["docs/a", "@WS@/.herdr-orch/r1/W2"]
+    criterion: "docs/a/README.md exists in the worktree"
+    output_path: "@WS@/.herdr-orch/r1/W2/report.md"
+    evidence_refs: ["@WS@/.herdr-orch/r1/W2/evidence.yml"]
+    estado: "verified"
+    runtime_status: "idle"
+    execution_outcome: "succeeded"
+    created_at: "2026-10-06T15:30:00Z"
+    last_state_at: "2026-10-06T15:41:00Z"
+    notas: ""
