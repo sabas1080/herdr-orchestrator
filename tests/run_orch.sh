@@ -444,7 +444,49 @@ resp agent_prompt '' 1 "$(herr timeout)"
 resp agent_wait "$(agent_json "$N1" idle)"
 resp agent_read 'some output'
 check dispatch-wait-running 0 "completed" orch dispatch --task W1 --prompt-file "$WS/task.md" --wait
-check wait-bad-timeout 2 "" orch wait --task W1 --timeout abc
+
+# ---- Task 6 review fix round 1 ----------------------------------------------
+unknown_task fix6-read-fail
+resp agent_get "$(agent_json "$N1" idle)"
+resp agent_read '' 1 "$(herr pane_not_found)"
+check fix6-read-fail 3 "pane read failed: pane_not_found" orch reconcile --task W1
+check fix6-read-fail-state 0 "outcome-unknown" st W1
+
+running_task fix6-hotloop
+resp agent_get '' 1 "$(herr server_unavailable)"
+resp agent_wait '' 1 "$(herr server_unavailable)"
+check fix6-wait-herr 1 "herdr error (server_unavailable); estado unchanged" orch wait --task W1
+orch wait --task W1 --stuck-secs 0 > "$C/herr.out" 2>&1
+check fix6-wait-herr-nostuck 0 "" sh -c "! grep -q stuck '$C/herr.out'"
+check fix6-wait-herr-state 0 "running" st W1
+
+running_task fix6-delivered
+resp agent_get "$(agent_json "$N1" working)"
+resp agent_wait '' 1 "$(herr timeout)"
+orch wait --task W1 --timeout 1 >/dev/null
+resp agent_get "$(agent_json "$N1" idle)"
+resp agent_read 'unrelated scrollback'
+check fix6-delivered-completed 0 "completed" orch reconcile --task W1
+check fix6-delivered-state 0 "completed" st W1
+check fix6-delivered-notas 0 "delivered earlier" st W1 notas
+
+setup_run fix6-dispatch-badto
+orch task add --id W1 --worker 1 --criterion c --scope docs/a >/dev/null
+check fix6-dispatch-badto 2 "must be a number" orch dispatch --task W1 --prompt-file "$WS/task.md" --wait --timeout abc
+check fix6-dispatch-badto-pending 0 "pending" st W1
+check fix6-dispatch-badto-nosend 0 "0" calls "agent prompt"
+
+running_task fix6-badto
+check wait-bad-timeout 2 "must be a number" orch wait --task W1 --timeout abc
+check fix6-long-timeout 2 "must be a number" orch wait --task W1 --timeout 12345678901
+check fix6-long-stuck 2 "must be a number" orch wait --task W1 --stuck-secs 12345678901
+
+running_task fix6-slice
+resp agent_get "$(agent_json "$N1" working)"
+resp agent_wait '' 1 "$(herr timeout)"
+orch wait --task W1 --timeout 1 >/dev/null
+check fix6-slice 0 "" grep -q '^agent wait .* --timeout 1000$' "$FAKE_HERDR_DIR/calls.log"
+check fix6-slice-not-60000 0 "" sh -c "! grep -q -- '--timeout 60000' '$FAKE_HERDR_DIR/calls.log'"
 
 # ---- orch.sh subcommand cases are appended by Tasks 4-7 --------------------
 

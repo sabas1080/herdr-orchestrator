@@ -351,6 +351,7 @@ sub_dispatch() {
     esac
     shift 2
   done
+  case "$_dp_to" in *[!0-9]*|???????????*) usage_die "dispatch: --timeout must be a number of milliseconds (at most 10 digits)" ;; esac
   [ -n "$_dp_t" ] && [ -f "$_dp_pf" ] || usage_die "dispatch: --task and an existing --prompt-file are required"
   require_run "$_dp_run"
   _dp_state=$(ledger_get "$_dp_t" estado)
@@ -420,8 +421,8 @@ EOF
 # read_hash AGENT: hash of recent output, ignoring the last 3 lines (spinners,
 # timers) and digits, so only real progress changes it (spec §6, advisory).
 read_hash() {
-  herdr agent read "$1" --source recent-unwrapped --lines 200 2>/dev/null |
-    sed '$d' | sed '$d' | sed '$d' | tr -d '0-9' | cksum
+  hcall agent read "$1" --source recent-unwrapped --lines 200 || return 1
+  _rh_hash=$(printf '%s\n' "$H_OUT" | sed '$d' | sed '$d' | sed '$d' | tr -d '0-9' | cksum)
 }
 sub_wait() {
   _wt_run=""; _wt_t=""; _wt_to=""; _wt_stuck=1800
@@ -433,8 +434,8 @@ sub_wait() {
     esac
     shift 2
   done
-  case "$_wt_to" in *[!0-9]*) usage_die "wait: --timeout must be a number of milliseconds" ;; esac
-  case "$_wt_stuck" in ''|*[!0-9]*) usage_die "wait: --stuck-secs must be a number" ;; esac
+  case "$_wt_to" in *[!0-9]*|???????????*) usage_die "wait: --timeout must be a number of milliseconds (at most 10 digits)" ;; esac
+  case "$_wt_stuck" in ''|*[!0-9]*|???????????*) usage_die "wait: --stuck-secs must be a number (at most 10 digits)" ;; esac
   [ -n "$_wt_t" ] || usage_die "wait: --task is required"
   require_run "$_wt_run"
   _wt_state=$(ledger_get "$_wt_t" estado)
@@ -443,9 +444,15 @@ sub_wait() {
   _wt_name=$(ledger_get "$_wt_t" agent_name)
   _wt_start=$(date +%s); _wt_deadline=0
   [ -z "$_wt_to" ] || _wt_deadline=$(( _wt_start + (_wt_to + 999) / 1000 ))
-  _wt_prev=""; _wt_since=$_wt_start
+  _wt_prev=""; _wt_since=$_wt_start; _wt_fails=0
   while :; do
-    hcall agent wait "$_wt_name" --timeout 60000
+    _wt_slice=60000
+    if [ "$_wt_deadline" -gt 0 ]; then
+      _wt_rem=$(( (_wt_deadline - $(date +%s)) * 1000 ))
+      [ "$_wt_rem" -ge "$_wt_slice" ] || _wt_slice=$_wt_rem
+      [ "$_wt_slice" -ge 1000 ] || _wt_slice=1000
+    fi
+    hcall agent wait "$_wt_name" --timeout "$_wt_slice"
     if [ "$H_ERR" = agent_not_found ]; then _wt_st=gone; else _wt_st=$(agent_status "$_wt_name"); fi
     case "$_wt_st" in
       idle|done)
@@ -459,17 +466,25 @@ sub_wait() {
         with_lock set_state "$_wt_t" interrupted "" "wait: agent $_wt_name is gone"
         printf 'wait: %s interrupted (agent %s is gone)\n' "$_wt_t" "$_wt_name"; exit 1 ;;
       working)
+        _wt_fails=0
         [ "$(ledger_get "$_wt_t" estado)" != awaiting-approval ] || with_lock set_state "$_wt_t" running working ;;
+      *)
+        _wt_fails=$((_wt_fails + 1))
+        if [ "$_wt_fails" -ge 3 ]; then
+          printf 'wait: %s herdr error (%s); estado unchanged\n' "$_wt_t" "${_wt_st#error:}"; exit 1
+        fi
+        sleep 1 ;;
     esac
     _wt_now=$(date +%s)
-    _wt_hash=$(read_hash "$_wt_name")
-    if [ "$_wt_hash" = "$_wt_prev" ]; then
-      if [ $(( _wt_now - _wt_since )) -ge "$_wt_stuck" ]; then
-        printf 'wait: %s stuck: no output change for %ss (advisory; estado unchanged). Keep waiting or cancel and reassign.\n' "$_wt_t" "$_wt_stuck"
-        exit 4
+    if [ "$_wt_st" = working ] && read_hash "$_wt_name"; then
+      if [ "$_rh_hash" = "$_wt_prev" ]; then
+        if [ $(( _wt_now - _wt_since )) -ge "$_wt_stuck" ]; then
+          printf 'wait: %s stuck: no output change for %ss (advisory; estado unchanged). Keep waiting or cancel and reassign.\n' "$_wt_t" "$_wt_stuck"
+          exit 4
+        fi
+      else
+        _wt_prev=$_rh_hash; _wt_since=$_wt_now
       fi
-    else
-      _wt_prev=$_wt_hash; _wt_since=$_wt_now
     fi
     if [ "$_wt_deadline" -gt 0 ] && [ "$_wt_now" -ge "$_wt_deadline" ]; then
       with_lock set_state "$_wt_t" outcome-unknown "" "wait: timeout after ${_wt_to}ms"
@@ -501,10 +516,18 @@ sub_reconcile() {
     idle|done)
       _rc_rt=$_rc_st
       if [ -f "$_rc_out" ]; then _rc_new=completed; _rc_note="reconcile: report present"
-      elif herdr agent read "$_rc_name" --source recent-unwrapped --lines 400 2>/dev/null |
-             grep -F -- "$(task_marker "$_rc_t")" >/dev/null; then
-        _rc_new=completed; _rc_note="reconcile: prompt seen, no report yet"
-      else _rc_new=pending; _rc_rt=""; _rc_note="reconciled: prompt not delivered"; fi ;;
+      else
+        if ! hcall agent read "$_rc_name" --source recent-unwrapped --lines 400; then
+          printf 'reconcile: %s unchanged (pane read failed: %s)\n' "$_rc_t" "$H_ERR"; exit 3
+        fi
+        _rc_rtold=$(ledger_get "$_rc_t" runtime_status)
+        if printf '%s\n' "$H_OUT" | grep -F -- "$(task_marker "$_rc_t")" >/dev/null; then
+          _rc_new=completed; _rc_note="reconcile: prompt seen, no report yet"
+        elif [ "$_rc_rtold" = working ] || [ "$_rc_rtold" = blocked ] ||
+             ledger_get "$_rc_t" notas | grep -F -- "wait: timeout" >/dev/null; then
+          _rc_new=completed; _rc_note="reconcile: delivered earlier; no report"
+        else _rc_new=pending; _rc_rt=""; _rc_note="reconciled: prompt not delivered"; fi
+      fi ;;
     *) printf 'reconcile: %s unchanged (agent status %s)\n' "$_rc_t" "$_rc_st"; exit 3 ;;
   esac
   if ! allowed_transition "$_rc_state" "$_rc_new"; then
