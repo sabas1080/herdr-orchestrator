@@ -129,6 +129,61 @@ check lib-slugify-ascii 0 "" env LC_ALL=$(locale -a | grep -im1 'utf-\?8' || ech
 check lib-die-releases-lock 0 "" lib_run '
   ( lock_acquire; die x ) 2>/dev/null; [ ! -d "$RUN_DIR/.lock" ]'
 
+# ---- Task 4: preflight / init-run / pool -----------------------------------
+new_case preflight
+check pre-ready 0 "gate=ready" orch preflight
+check pre-no-herdr-env 2 "HERDR_ENV" sh -c "cd '$WS' && HERDR_ENV=0 PATH='$FAKE_BIN:$PATH' sh '$ORCH' preflight"
+resp status_--json '{"client":{"version":"0.8.2"},"server":{"version":"0.9.0","compatible":false}}'
+check pre-incompatible 2 "gate=blocked" orch preflight
+
+new_case init
+check init-two 0 "run t1 ready" orch init-run --run-id t1 --worker claude --worker codex:Glacielle
+check init-split-count 0 "" sh -c "[ \$(grep -c '^pane split' '$FAKE_HERDR_DIR/calls.log') -eq 2 ]"
+check init-first-split-right 0 "" grep -q -- "pane split --current --direction right" "$FAKE_HERDR_DIR/calls.log"
+check init-second-split-down 0 "" grep -q -- "pane split --pane w1:p2 --direction down" "$FAKE_HERDR_DIR/calls.log"
+check init-workers-tsv 0 "codex" sh -c "awk -F'\t' 'NR==3{print \$4}' '$WS/.herdr-orch/t1/workers.tsv'"
+check init-names 0 "" sh -c "awk -F'\t' 'NR==2{print \$2}' '$WS/.herdr-orch/t1/workers.tsv' | grep -qx 'w01-vermithrax-[0-9a-f][0-9a-f][0-9a-f][0-9a-f]'"
+check init-ledger-valid 0 "empty tasks" sh -c "cd '$WS' && sh '$SCRIPTS/validate_dag.sh' .herdr-orch/t1/ledger.yaml"
+check init-exclude 0 "" grep -qx '.herdr-orch/' "$WS/.git/info/exclude"
+check init-label 0 "" grep -q -- 'pane rename w1:p3 \[02\] Glacielle' "$FAKE_HERDR_DIR/calls.log"
+N1=$(awk -F'\t' 'NR==2{print $2}' "$WS/.herdr-orch/t1/workers.tsv")
+N2=$(awk -F'\t' 'NR==3{print $2}' "$WS/.herdr-orch/t1/workers.tsv")
+resp agent_list "{\"result\":{\"agents\":[{\"name\":\"$N1\",\"agent_status\":\"idle\",\"pane_id\":\"w1:p2\"},{\"name\":\"$N2\",\"agent_status\":\"working\",\"pane_id\":\"w1:p3\"},{\"agent_status\":\"idle\",\"pane_id\":\"w9:p1\"}],\"type\":\"agent_list\"}}"
+check init-rerun-reuses 0 "reused" orch init-run --run-id t1 --worker claude --worker codex:Glacielle
+check init-rerun-no-new-split 0 "" sh -c "[ \$(grep -c '^pane split' '$FAKE_HERDR_DIR/calls.log') -eq 2 ]"
+check pool-lists 0 "working" orch pool
+check pool-unnamed-agent-ignored 0 "" sh -c "cd '$WS' && PATH='$FAKE_BIN:$PATH' HERDR_ENV=1 sh '$ORCH' pool | grep -c . | grep -qx 3"
+
+new_case init-partial
+resp agent_start.2 '' 1 "$(herr agent_not_ready)"
+check init-partial-incomplete 1 "INCOMPLETE" orch init-run --run-id t2 --worker claude --worker claude
+N1=$(awk -F'\t' 'NR==2{print $2}' "$WS/.herdr-orch/t2/workers.tsv")
+resp agent_list "{\"result\":{\"agents\":[{\"name\":\"$N1\",\"agent_status\":\"idle\",\"pane_id\":\"w1:p2\"}],\"type\":\"agent_list\"}}"
+check init-partial-rerun 0 "started" orch init-run --run-id t2 --worker claude --worker claude
+check init-partial-reused-pane 0 "" sh -c "[ \$(grep -c '^pane split' '$FAKE_HERDR_DIR/calls.log') -eq 2 ] && [ \$(grep -c '^agent start' '$FAKE_HERDR_DIR/calls.log') -eq 3 ]"
+
+new_case collision
+SFX=$(lib 'run_suffix t3')
+resp agent_list "{\"result\":{\"agents\":[{\"name\":\"w01-vermithrax-$SFX\",\"agent_status\":\"idle\",\"pane_id\":\"w5:p1\"}],\"type\":\"agent_list\"}}"
+check init-collision 1 "already live outside run t3" orch init-run --run-id t3 --worker claude
+check init-collision-no-split 0 "" sh -c "! grep -q '^pane split' '$FAKE_HERDR_DIR/calls.log'"
+check init-unknown-kind 2 "unknown agent kind" orch init-run --run-id t4 --worker gpt9
+
+new_case worktree
+resp worktree_create.1 '{"result":{"workspace":{"workspace_id":"w7"},"worktree":{"path":"/tmp/wt-one"},"type":"worktree_created"}}'
+resp worktree_create.2 '{"result":{"workspace":{"workspace_id":"w8"},"tab":{"tab_id":"w8:t1"},"root_pane":{"pane_id":"w8:p1"},"worktree":{"path":"/tmp/wt-two"},"type":"worktree_created"}}'
+resp pane_list '{"result":{"panes":[{"pane_id":"w7:p1"}],"type":"pane_list"}}'
+check init-worktree 0 "run t6 ready" orch init-run --run-id t6 --worker claude --worker claude --worktree
+check init-worktree-rows 0 "w8:p1	/tmp/wt-two	/tmp/wt-two" cat "$WS/.herdr-orch/t6/workers.tsv"
+check init-worktree-fallback 0 "w7:p1	/tmp/wt-one" cat "$WS/.herdr-orch/t6/workers.tsv"
+check init-worktree-no-split 0 "" sh -c "! grep -q '^pane split' '$FAKE_HERDR_DIR/calls.log' && [ \$(grep -c '^pane list' '$FAKE_HERDR_DIR/calls.log') -eq 1 ]"
+check init-worktree-branch 0 "" grep -q -- "worktree create --branch orch/t6/01-" "$FAKE_HERDR_DIR/calls.log"
+
+new_case subdir
+orch init-run --run-id t5 --worker claude >/dev/null 2>&1
+mkdir -p "$WS/sub"
+check pool-from-subdir 2 "no run selected" sh -c "cd '$WS/sub' && PATH='$FAKE_BIN:$PATH' HERDR_ENV=1 sh '$ORCH' pool"
+
 # ---- orch.sh subcommand cases are appended by Tasks 4-7 --------------------
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAILS"
