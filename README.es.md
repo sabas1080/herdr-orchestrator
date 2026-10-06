@@ -20,7 +20,7 @@
 El nombre de la carpeta debe ser igual al `name` del skill (`herdr-orchestrator`).
 
 ```bash
-git clone https://github.com/sabas1080/OpenCode-Orchestrator-Skill.git ~/.claude/skills/herdr-orchestrator-src
+git clone https://github.com/sabas1080/herdr-orchestrator.git ~/.claude/skills/herdr-orchestrator-src
 ln -s ~/.claude/skills/herdr-orchestrator-src/SKILL ~/.claude/skills/herdr-orchestrator   # o copia SKILL/ ahí
 ```
 
