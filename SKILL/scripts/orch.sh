@@ -36,7 +36,7 @@ sub_preflight() {
   printf 'server_version=%s\n' "$(printf '%s' "$H_OUT" | jq -r '.server.version')"
   printf 'client_version=%s\n' "$(printf '%s' "$H_OUT" | jq -r '.client.version')"
   printf 'compatible=%s\n' "$_pf_compat"
-  printf 'kinds=%s\n' "$(herdr agent 2>&1 | sed -n 's/^ *kinds: *//p')"
+  printf 'kinds=%s\n' "$(herdr agent </dev/null 2>&1 | sed -n 's/^ *kinds: *//p')"
   hcall pane current --current || die "cannot read the current pane: $H_ERR" 2
   if [ -r "$SKILL_SCRIPTS/prompt-templates/task-header.md" ]; then printf 'template=ok\n'
   else printf 'template=missing\n'; die "prompt-templates/task-header.md is missing or unreadable" 2; fi
@@ -75,7 +75,7 @@ sub_init_run() {
   [ -n "$_ir_run" ] || _ir_run=$(date -u +%Y%m%d-%H%M)-run
   resolve_run "$_ir_run"
   _ir_sfx=$(run_suffix "$RUN_ID")
-  _ir_kinds=$(herdr agent 2>&1 | sed -n 's/^ *kinds: *//p')
+  _ir_kinds=$(herdr agent </dev/null 2>&1 | sed -n 's/^ *kinds: *//p')
   hcall agent list || die "cannot list herdr agents: $H_ERR $H_ERRMSG"
   _ir_live=$(printf '%s' "$H_OUT" | jq -r '.result.agents[]? | select((.name // "") != "") | "\(.name)\t\(.pane_id // "")"')
 

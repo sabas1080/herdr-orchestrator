@@ -3,6 +3,7 @@
 # Key = "$1_$2" (agent_list, pane_split, status_--json, agent_ for bare `herdr agent`).
 # The Nth call of a key uses KEY.N when any of KEY.N, KEY.N.rc, KEY.N.err exists,
 # else KEY. KEY[.N].rc holds the exit code (default 0), KEY[.N].err the stderr.
+# KEY.eatstdin: the call consumes stdin (tests that callers redirect it).
 # Every call is appended to $FAKE_HERDR_DIR/calls.log.
 set -u
 d=${FAKE_HERDR_DIR:?FAKE_HERDR_DIR not set}
@@ -17,6 +18,7 @@ if [ ! -e "$base" ] && [ ! -e "$base.rc" ] && [ ! -e "$base.err" ]; then
   printf '{"error":{"code":"fake_unconfigured","message":"no fake response for %s"}}\n' "$key" >&2
   exit 1
 fi
+[ -e "$d/responses/$key.eatstdin" ] && cat >/dev/null
 [ -e "$base" ] && cat "$base"
 [ -e "$base.err" ] && cat "$base.err" >&2
 exit "$(cat "$base.rc" 2>/dev/null || echo 0)"

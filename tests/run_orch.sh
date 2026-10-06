@@ -638,6 +638,12 @@ check fix9-suggest-noenv 0 "suggest-count=1" sh -c "cd '$WS' && HERDR_ENV=0 PATH
 resp agent_list "{\"result\":{\"agents\":[{\"name\":\"$N1\",\"agent_status\":\"working\",\"pane_id\":\"w1:p2\"},{\"name\":\"$N2\",\"agent_status\":\"working\",\"pane_id\":\"w1:p3\"}],\"type\":\"agent_list\"}}"
 check fix9-suggest-note 0 "note=no idle workers" orch suggest-count "$WS/tiny.md"
 
+# ---- Task 7 fix round 2: hcall must not leak stdin into herdr ------------------
+new_case fix10-stdin
+: > "$FAKE_HERDR_DIR/responses/agent_start.eatstdin"
+check fix10-stdin-init 0 "ready" orch init-run --run-id s1 --worker claude --worker claude
+check fix10-stdin-two-starts 0 "" sh -c "[ \$(grep -c '^agent start' '$FAKE_HERDR_DIR/calls.log') -eq 2 ]"
+
 # ---- orch.sh subcommand cases are appended by Tasks 4-7 --------------------
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAILS"

@@ -5,7 +5,7 @@
 # hcall ARGS...: run herdr; sets H_OUT, H_RC, H_ERR ("" on success), H_ERRMSG
 hcall() {
   _hc_err=$(mktemp "${TMPDIR:-/tmp}/orch-herr.XXXXXX") || die "mktemp failed" 2
-  H_OUT=$(herdr "$@" 2>"$_hc_err"); H_RC=$?
+  H_OUT=$(herdr "$@" </dev/null 2>"$_hc_err"); H_RC=$?
   H_ERR=""; H_ERRMSG=""
   if [ "$H_RC" -ne 0 ]; then
     H_ERR=$(jq -r '.error.code // empty' < "$_hc_err" 2>/dev/null)
@@ -39,4 +39,4 @@ wait_shell_ready() {
   done
 }
 # notify BODY SOUND(done|request|none): best effort, never fails the caller
-notify() { herdr notification show "herdr-orchestrator" --body "$1" --sound "$2" >/dev/null 2>&1 || true; }
+notify() { herdr notification show "herdr-orchestrator" --body "$1" --sound "$2" </dev/null >/dev/null 2>&1 || true; }
