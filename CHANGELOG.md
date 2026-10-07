@@ -4,9 +4,9 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.0] - 2026-10-07
 
-Driven by feedback from a real 5-worker, 9-task run.
+Driven by feedback from a real 5-worker, 9-task run. Live acceptance on herdr 0.8.2 with 2 claude workers and 3 tasks (reassign, stored task files, `wait --any`, block `observed`, `summary`): `TOTAL: 6 passed, 0 failed` (`docs/superpowers/acceptance/2026-10-07-feedback-e2e.md`).
 
 ### Added
 - `task reassign --task ID --worker N`: moves a `pending` task to another worker (worker fields rewritten, DAG re-validated, `notas` records the previous agent). No cancelled row, so the run no longer closes as degraded when nothing failed.

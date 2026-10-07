@@ -867,11 +867,13 @@ check fb-summary-run 0 "run=t" orch summary
 check fb-summary-ws 0 "workspace=$WS" orch summary
 check fb-summary-server 0 "server_version=0.8.2" orch summary
 check fb-summary-header 0 "TASK	WORKER	KIND	ESTADO	SUMMARY	EVIDENCE" orch summary
-check fb-summary-verified 0 "W1	$T1	claude	verified	Added module a docs.	$WS/.herdr-orch/t/W1/evidence.yml" orch summary
+check fb-summary-verified 0 "W1	$T1	claude	verified	Added module a docs. More.	$WS/.herdr-orch/t/W1/evidence.yml" orch summary
 check fb-summary-pending 0 "W2	$T2	claude	pending	-	$WS/.herdr-orch/t/W2/evidence.yml" orch summary
 check fb-summary-counts 0 "tasks=3 verified=1 degraded=1 open=1" orch summary
 printf '# only a heading\n' > "$WS/.herdr-orch/t/W1/report.md"
 check fb-summary-heading-only 0 "verified	only a heading	" orch summary
+printf '# W1\n\nCreated docs/b/README.md documenting the\nsingle function of greet.py.\n\nSecond paragraph.\n' > "$WS/.herdr-orch/t/W1/report.md"
+check fb-summary-paragraph 0 "verified	Created docs/b/README.md documenting the single function of greet.py.	" orch summary
 check fb-summary-badarg 2 "unknown argument" orch summary --bogus
 
 # task status: non-blocking; wait's exit codes, 6 while the task has not settled

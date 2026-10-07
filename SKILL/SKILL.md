@@ -5,7 +5,7 @@ license: MIT
 compatibility: "Requires running inside a herdr pane (HERDR_ENV=1) with herdr >= 0.8.2 and jq. Validators need only POSIX sh + awk."
 metadata:
   author: DragonJAR.org; herdr port by Electronic Cats
-  skill_version: "0.1.0"
+  skill_version: "0.2.0"
   category: workflow-automation
   tags: [herdr, orchestration, multi-agent, dag, evidence, ledger]
 ---
@@ -111,7 +111,7 @@ The final report to the user, in this order:
 
 1. **Global state:** `verified`, `partial`, `blocked` or `failed`, and **normal** or **degraded**.
 2. **Run identity:** run id, workspace directory, herdr server version.
-3. **Per task:** task id, worker (`[NN] Title`, kind), final `estado`, one-line summary from its report, evidence path. `orch.sh summary` prints items 2 and 3 (plus `tasks=… verified=… degraded=… open=…`) from the ledger; refine the summary column from the reports.
+3. **Per task:** task id, worker (`[NN] Title`, kind), final `estado`, one-line summary from its report, evidence path. `orch.sh summary` prints items 2 and 3 (plus `tasks=… verified=… degraded=… open=…`) from the ledger; its summary column is each report's first paragraph, shorten it to one line.
 4. **Validation:** the `TOTAL` line from `orch.sh close` (or "validation not executed" and why).
 5. **Blockers and unknowns:** pending approvals, `outcome-unknown` tasks, worktree branches left for the user to merge.
 

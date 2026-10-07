@@ -119,7 +119,7 @@ Runs the closure validator with `--require-evidence` and prints `[FAIL]` lines p
 orch.sh summary
 ```
 
-Prints `run=`, `workspace=`, `server_version=`, then one tab-separated row per task (`TASK WORKER KIND ESTADO SUMMARY EVIDENCE`; `SUMMARY` is the first non-heading line of `report.md`, `-` when absent) and `tasks=N verified=A degraded=B open=C`. Nothing is read from the panes. Then deliver the output contract ([prompt-templates.md](prompt-templates.md) section 3). Teardown only on request:
+Prints `run=`, `workspace=`, `server_version=`, then one tab-separated row per task (`TASK WORKER KIND ESTADO SUMMARY EVIDENCE`; `SUMMARY` is the first non-heading paragraph of `report.md` with its wrapped lines joined, `-` when absent) and `tasks=N verified=A degraded=B open=C`. Nothing is read from the panes. Then deliver the output contract ([prompt-templates.md](prompt-templates.md) section 3). Teardown only on request:
 
 ```sh
 orch.sh teardown                       # dry run: lists what would be closed

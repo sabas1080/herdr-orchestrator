@@ -70,7 +70,7 @@ Take `<agent_name>` and the paths from `orch.sh pool` and the ledger. Add `--wai
 
 ## 3. Final report to the user
 
-`orch.sh summary` prints the run line and one tab-separated row per task straight from the ledger (its summary column is the first line of each `report.md`; check it against the report). Reply in the user's language, in this order:
+`orch.sh summary` prints the run line and one tab-separated row per task straight from the ledger (its summary column is the first paragraph of each `report.md`; check it against the report and shorten it). Reply in the user's language, in this order:
 
 ```markdown
 **Global state:** <verified | partial | blocked | failed> — <normal | degraded (why)>

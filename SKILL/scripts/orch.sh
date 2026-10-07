@@ -791,16 +791,17 @@ EOF
 }
 
 # ---- summary -------------------------------------------------------------------
-# report_summary FILE -> first non-empty, non-heading line of a report; when the
-# report has only headings, the first heading without its '#'; "-" when absent.
+# report_summary FILE -> first non-heading paragraph of a report (its wrapped
+# lines joined with spaces); when the report has only headings, the first
+# heading without its '#'; "-" when absent.
 report_summary() {
   [ -f "$1" ] || { printf -- '-'; return; }
   awk '
     { line = $0; sub(/\r$/, "", line); sub(/^[ \t]+/, "", line); sub(/[ \t]+$/, "", line) }
-    line == "" { next }
-    line ~ /^#/ { if (h == "") { h = line; sub(/^#+[ \t]*/, "", h) } ; next }
-    { print line; found = 1; exit }
-    END { if (!found) print (h == "" ? "-" : h) }' "$1" | tr '\t' ' '
+    line == "" { if (p != "") exit; next }
+    line ~ /^#/ { if (p != "") exit; if (h == "") { h = line; sub(/^#+[ \t]*/, "", h) } ; next }
+    { p = (p == "" ? line : p " " line) }
+    END { if (p != "") print p; else print (h == "" ? "-" : h) }' "$1" | tr '\t' ' '
 }
 # summary: the output contract (SKILL.md) from the ledger; nothing is read
 # from the panes. Rows: TASK WORKER KIND ESTADO SUMMARY EVIDENCE; then counts.
