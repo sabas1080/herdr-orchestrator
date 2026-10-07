@@ -855,6 +855,25 @@ cp "$WS/.herdr-orch/t/ledger.yaml" "$C/before.yaml"
 check fb-reassign-overlap 1 "rejected" orch task reassign --task W2 --worker 2
 check fb-reassign-overlap-unchanged 0 "" cmp -s "$C/before.yaml" "$WS/.herdr-orch/t/ledger.yaml"
 
+# summary: the output contract from the ledger (run identity, per-task rows, counts)
+setup_run fb-summary
+done_task W1 1
+orch task add --id W2 --worker 2 --criterion c --scope docs/b >/dev/null
+orch task add --id W3 --worker 2 --criterion c --scope docs/c >/dev/null
+orch task set --task W3 --estado cancelled --notas 'replanned' >/dev/null
+printf '# Report W1\n\nAdded module a docs.\nMore.\n' > "$WS/.herdr-orch/t/W1/report.md"
+T1=$(st W1 title); T2=$(st W2 title)
+check fb-summary-run 0 "run=t" orch summary
+check fb-summary-ws 0 "workspace=$WS" orch summary
+check fb-summary-server 0 "server_version=0.8.2" orch summary
+check fb-summary-header 0 "TASK	WORKER	KIND	ESTADO	SUMMARY	EVIDENCE" orch summary
+check fb-summary-verified 0 "W1	$T1	claude	verified	Added module a docs.	$WS/.herdr-orch/t/W1/evidence.yml" orch summary
+check fb-summary-pending 0 "W2	$T2	claude	pending	-	$WS/.herdr-orch/t/W2/evidence.yml" orch summary
+check fb-summary-counts 0 "tasks=3 verified=1 degraded=1 open=1" orch summary
+printf '# only a heading\n' > "$WS/.herdr-orch/t/W1/report.md"
+check fb-summary-heading-only 0 "verified	only a heading	" orch summary
+check fb-summary-badarg 2 "unknown argument" orch summary --bogus
+
 # ---- orch.sh subcommand cases are appended by Tasks 4-7 --------------------
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAILS"

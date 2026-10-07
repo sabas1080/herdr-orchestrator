@@ -25,6 +25,7 @@ orch.sh wait --task ID [--timeout MS] [--stuck-secs N] [--run ID]
 orch.sh reconcile --task ID [--run ID]
 orch.sh verify --task ID [--run ID]
 orch.sh suggest-count FILE
+orch.sh summary [--run ID]
 orch.sh close [--allow-degraded] [--run ID]
 orch.sh teardown [--confirm] [--remove-worktrees] [--run ID]
 USAGE
@@ -686,6 +687,48 @@ EOF
   printf '[OK] %s verified; report: %s\n' "$_vf_t" "$_vf_out"
 }
 
+# ---- summary -------------------------------------------------------------------
+# report_summary FILE -> first non-empty, non-heading line of a report; when the
+# report has only headings, the first heading without its '#'; "-" when absent.
+report_summary() {
+  [ -f "$1" ] || { printf -- '-'; return; }
+  awk '
+    { line = $0; sub(/\r$/, "", line); sub(/^[ \t]+/, "", line); sub(/[ \t]+$/, "", line) }
+    line == "" { next }
+    line ~ /^#/ { if (h == "") { h = line; sub(/^#+[ \t]*/, "", h) } ; next }
+    { print line; found = 1; exit }
+    END { if (!found) print (h == "" ? "-" : h) }' "$1" | tr '\t' ' '
+}
+# summary: the output contract (SKILL.md) from the ledger; nothing is read
+# from the panes. Rows: TASK WORKER KIND ESTADO SUMMARY EVIDENCE; then counts.
+sub_summary() {
+  _sm_run=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --run) [ $# -ge 2 ] || usage_die "--run needs a value"; _sm_run=$2; shift 2 ;;
+      *) usage_die "summary: unknown argument: $1" ;;
+    esac
+  done
+  require_run "$_sm_run"
+  printf 'run=%s\nworkspace=%s\nserver_version=%s\n' "$RUN_ID" \
+    "$(ledger_run_get workspace directory)" "$(ledger_run_get herdr server_version)"
+  printf 'TASK\tWORKER\tKIND\tESTADO\tSUMMARY\tEVIDENCE\n'
+  _sm_n=0; _sm_v=0; _sm_d=0
+  while IFS='	' read -r _sm_t _sm_a _sm_e; do
+    [ -n "$_sm_t" ] || continue
+    _sm_n=$((_sm_n + 1))
+    case "$_sm_e" in
+      verified) _sm_v=$((_sm_v + 1)) ;;
+      failed|blocked|partial|cancelled|interrupted) _sm_d=$((_sm_d + 1)) ;;
+    esac
+    printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$_sm_t" "$(ledger_get "$_sm_t" title)" "$(ledger_get "$_sm_t" kind)" \
+      "$_sm_e" "$(report_summary "$(ledger_get "$_sm_t" output_path)")" "$(ledger_list "$_sm_t" evidence_refs | head -n 1)"
+  done <<EOF
+$(ledger_rows)
+EOF
+  printf 'tasks=%d verified=%d degraded=%d open=%d\n' "$_sm_n" "$_sm_v" "$_sm_d" $((_sm_n - _sm_v - _sm_d))
+}
+
 # ---- close ---------------------------------------------------------------------
 sub_close() {
   _cl_run=""; _cl_deg=0
@@ -813,6 +856,7 @@ case "$cmd" in
   wait) sub_wait "$@" ;;
   reconcile) sub_reconcile "$@" ;;
   verify) sub_verify "$@" ;;
+  summary) sub_summary "$@" ;;
   close) sub_close "$@" ;;
   teardown) sub_teardown "$@" ;;
   *) usage_text >&2; usage_die "unknown subcommand: $cmd" ;;
