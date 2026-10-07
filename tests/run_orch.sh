@@ -874,6 +874,32 @@ printf '# only a heading\n' > "$WS/.herdr-orch/t/W1/report.md"
 check fb-summary-heading-only 0 "verified	only a heading	" orch summary
 check fb-summary-badarg 2 "unknown argument" orch summary --bogus
 
+# task status: non-blocking; wait's exit codes, 6 while the task has not settled
+setup_run fb-status
+orch task add --id W1 --worker 1 --criterion c --scope docs/a >/dev/null
+check fb-status-pending 6 "status: W1 pending ($N1)" orch task status --task W1
+resp agent_prompt '' 1 "$(herr timeout)"
+orch dispatch --task W1 --prompt-file "$WS/task.md" >/dev/null
+: > "$FAKE_HERDR_DIR/calls.log"
+check fb-status-running 6 "status: W1 running" orch task status --task W1
+check fb-status-no-herdr-call 0 "" test ! -s "$FAKE_HERDR_DIR/calls.log"
+resp agent_get "$(agent_json "$N1" idle)"; resp agent_wait "$(agent_json "$N1" idle)"; resp agent_read 'x'
+orch wait --task W1 >/dev/null
+check fb-status-completed 0 "status: W1 completed" orch task status --task W1
+orch task add --id W2 --worker 2 --criterion c --scope docs/b >/dev/null
+orch task set --task W2 --estado failed --notas 'crashed' >/dev/null
+check fb-status-failed 1 "status: W2 failed" orch task status --task W2
+check fb-status-unknown-task 2 "unknown task" orch task status --task W9
+check fb-status-no-task 2 "--task is required" orch task status
+running_task fb-status-approval
+resp agent_get "$(agent_json "$N1" blocked)"
+orch wait --task W1 >/dev/null 2>&1
+check fb-status-approval 5 "status: W1 awaiting-approval" orch task status --task W1
+running_task fb-status-unknown
+resp agent_get "$(agent_json "$N1" working)"; resp agent_wait '' 1 "$(herr timeout)"
+orch wait --task W1 --timeout 1 >/dev/null 2>&1
+check fb-status-outcome-unknown 3 "status: W1 outcome-unknown" orch task status --task W1
+
 # ---- orch.sh subcommand cases are appended by Tasks 4-7 --------------------
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAILS"

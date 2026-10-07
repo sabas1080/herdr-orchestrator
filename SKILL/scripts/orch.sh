@@ -2,7 +2,7 @@
 # orch.sh — herdr-orchestrator entry point (spec §6). POSIX sh; needs herdr + jq.
 # Run it from the orchestrator's workspace root. Exit codes: 0 ok, 1 failure,
 # 2 usage/environment, 3 outcome unknown/timeout, 4 stuck (advisory),
-# 5 awaiting approval.
+# 5 awaiting approval, 6 not settled yet (task status only).
 set -u
 set -f
 SKILL_SCRIPTS=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
@@ -20,6 +20,7 @@ orch.sh pool [--run ID]
 orch.sh task add --id ID --worker NAME|NN --criterion TEXT --scope A[,B] [--deps X[,Y]] [--run ID]
 orch.sh task set --task ID --estado cancelled|failed|partial|blocked|interrupted --notas TEXT [--run ID]
 orch.sh task reassign --task ID --worker NAME|NN [--run ID]
+orch.sh task status --task ID [--run ID]
 orch.sh dispatch --task ID --prompt-file F [--wait] [--timeout MS] [--run ID]
 orch.sh wait --task ID [--timeout MS] [--stuck-secs N] [--run ID]
 orch.sh reconcile --task ID [--run ID]
@@ -279,7 +280,8 @@ sub_task() {
     add) sub_task_add "$@" ;;
     set) sub_task_set "$@" ;;
     reassign) sub_task_reassign "$@" ;;
-    *) usage_die "task: expected 'add', 'set' or 'reassign'" ;;
+    status) sub_task_status "$@" ;;
+    *) usage_die "task: expected 'add', 'set', 'reassign' or 'status'" ;;
   esac
 }
 sub_task_add() {
@@ -404,6 +406,30 @@ sub_task_reassign() {
     printf '%s\n' "$_tr_out" | grep '^\[FAIL\]'
     die "task $_tr_t reassignment rejected by validate_dag.sh (ledger unchanged)"
   fi
+}
+
+# task status: the ledger's estado without touching herdr. Exit codes follow
+# wait: 0 completed/verified, 1 terminal non-verified, 3 outcome-unknown,
+# 5 awaiting-approval, 6 not settled yet (pending, launching, running).
+sub_task_status() {
+  _tst_run=""; _tst_t=""
+  while [ $# -gt 0 ]; do
+    [ $# -ge 2 ] || usage_die "task status: $1 needs a value"
+    case "$1" in --run) _tst_run=$2 ;; --task) _tst_t=$2 ;; *) usage_die "task status: unknown argument: $1" ;; esac
+    shift 2
+  done
+  [ -n "$_tst_t" ] || usage_die "task status: --task is required"
+  require_run "$_tst_run"
+  [ -n "$(ledger_get "$_tst_t" task_id)" ] || usage_die "unknown task: $_tst_t"
+  _tst_e=$(ledger_get "$_tst_t" estado)
+  printf 'status: %s %s (%s)\n' "$_tst_t" "$_tst_e" "$(ledger_get "$_tst_t" agent_name)"
+  case "$_tst_e" in
+    completed|verified) exit 0 ;;
+    awaiting-approval) exit 5 ;;
+    outcome-unknown) exit 3 ;;
+    pending|launching|running) exit 6 ;;
+    *) exit 1 ;;
+  esac
 }
 
 # ---- dispatch ------------------------------------------------------------------
