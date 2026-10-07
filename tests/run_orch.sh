@@ -808,6 +808,53 @@ orch task add --id W1 --worker 1 --criterion c --scope docs/a >/dev/null
 orch task add --id W2 --worker 1 --criterion c --scope docs/b >/dev/null
 check fb-pool-first-pending 0 "W1	pending" orch pool
 
+# task reassign: pending tasks move to another worker without a cancelled row
+setup_run fb-reassign
+orch task add --id W1 --worker 1 --criterion c --scope docs/a >/dev/null
+check fb-reassign 0 "task W1 -> $N2" orch task reassign --task W1 --worker 2
+check fb-reassign-agent 0 "$N2" st W1 agent_name
+check fb-reassign-pane 0 "w1:p3" st W1 pane_id
+check fb-reassign-title 0 "[02]" st W1 title
+check fb-reassign-still-pending 0 "pending" st W1
+check fb-reassign-valid 0 "TOTAL: " sh -c "cd '$WS' && sh '$SCRIPTS/validate_dag.sh' .herdr-orch/t/ledger.yaml"
+check fb-reassign-pool 0 "$N2	claude	idle	w1:p3	W1	pending" orch pool
+resp agent_get "$(agent_json "$N2" idle)"
+resp agent_prompt "$(agent_json "$N2" done)"
+check fb-reassign-dispatch 0 "completed" orch dispatch --task W1 --prompt-file "$WS/task.md"
+check fb-reassign-dispatch-target 0 "" grep -q "^agent prompt $N2 " "$FAKE_HERDR_DIR/calls.log"
+check fb-reassign-not-pending 2 "not pending" orch task reassign --task W1 --worker 1
+check fb-reassign-unknown-worker 2 "unknown worker" orch task reassign --task W1 --worker 9
+check fb-reassign-unknown-task 2 "unknown task" orch task reassign --task W9 --worker 2
+check fb-reassign-no-worker 2 "--worker" orch task reassign --task W1
+# reassign to a busy worker queues the task (same as task add)
+setup_run fb-reassign-busy
+orch task add --id W1 --worker 1 --criterion c --scope docs/a >/dev/null
+orch task add --id W2 --worker 2 --criterion c --scope docs/b >/dev/null
+resp agent_prompt '' 1 "$(herr timeout)"
+orch dispatch --task W2 --prompt-file "$WS/task.md" >/dev/null
+check fb-reassign-busy-queued 0 "task W1 -> $N2" orch task reassign --task W1 --worker 2
+check fb-reassign-busy-notas 0 "reassigned from $N1" st W1 notas
+check fb-reassign-busy-pool 0 "W2	running" orch pool
+# reassign to a worktree worker rewrites directory and worktree together
+new_case fb-reassign-wt
+resp worktree_create.1 '{"result":{"workspace":{"workspace_id":"w7"},"root_pane":{"pane_id":"w7:p1"},"worktree":{"path":"@WT1@"},"type":"worktree_created"}}'
+resp worktree_create.2 '{"result":{"workspace":{"workspace_id":"w8"},"root_pane":{"pane_id":"w8:p1"},"worktree":{"path":"@WT2@"},"type":"worktree_created"}}'
+mkdir -p "$C/wt1" "$C/wt2"; WT1=$(cd "$C/wt1" && pwd -P); WT2=$(cd "$C/wt2" && pwd -P)
+sed -i "s|@WT1@|$WT1|" "$FAKE_HERDR_DIR/responses/worktree_create.1"; sed -i "s|@WT2@|$WT2|" "$FAKE_HERDR_DIR/responses/worktree_create.2"
+orch init-run --run-id t --worker claude --worker claude --worktree >/dev/null 2>&1
+N1=$(awk -F'\t' 'NR==2{print $2}' "$WS/.herdr-orch/t/workers.tsv"); N2=$(awk -F'\t' 'NR==3{print $2}' "$WS/.herdr-orch/t/workers.tsv")
+resp agent_list "{\"result\":{\"agents\":[{\"name\":\"$N1\",\"agent_status\":\"idle\",\"pane_id\":\"w7:p1\"},{\"name\":\"$N2\",\"agent_status\":\"idle\",\"pane_id\":\"w8:p1\"}],\"type\":\"agent_list\"}}"
+orch task add --id W1 --worker 1 --criterion c --scope docs/a >/dev/null
+check fb-reassign-wt 0 "task W1 -> $N2" orch task reassign --task W1 --worker 2
+check fb-reassign-wt-dir 0 "$WT2" st W1 directory
+check fb-reassign-wt-wt 0 "$WT2" st W1 worktree
+check fb-reassign-wt-valid 0 "TOTAL: " sh -c "cd '$WS' && sh '$SCRIPTS/validate_dag.sh' .herdr-orch/t/ledger.yaml"
+# the same relative scope on the same worktree overlaps: rejected, ledger unchanged
+orch task add --id W2 --worker 1 --criterion c --scope docs/a >/dev/null
+cp "$WS/.herdr-orch/t/ledger.yaml" "$C/before.yaml"
+check fb-reassign-overlap 1 "rejected" orch task reassign --task W2 --worker 2
+check fb-reassign-overlap-unchanged 0 "" cmp -s "$C/before.yaml" "$WS/.herdr-orch/t/ledger.yaml"
+
 # ---- orch.sh subcommand cases are appended by Tasks 4-7 --------------------
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAILS"

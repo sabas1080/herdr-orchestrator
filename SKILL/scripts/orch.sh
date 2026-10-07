@@ -19,6 +19,7 @@ orch.sh init-run [--run-id ID] --worker KIND[:Title]... [--worktree] [--agent-ar
 orch.sh pool [--run ID]
 orch.sh task add --id ID --worker NAME|NN --criterion TEXT --scope A[,B] [--deps X[,Y]] [--run ID]
 orch.sh task set --task ID --estado cancelled|failed|partial|blocked|interrupted --notas TEXT [--run ID]
+orch.sh task reassign --task ID --worker NAME|NN [--run ID]
 orch.sh dispatch --task ID --prompt-file F [--wait] [--timeout MS] [--run ID]
 orch.sh wait --task ID [--timeout MS] [--stuck-secs N] [--run ID]
 orch.sh reconcile --task ID [--run ID]
@@ -276,7 +277,8 @@ sub_task() {
   case "$_tk_sub" in
     add) sub_task_add "$@" ;;
     set) sub_task_set "$@" ;;
-    *) usage_die "task: expected 'add' or 'set'" ;;
+    reassign) sub_task_reassign "$@" ;;
+    *) usage_die "task: expected 'add', 'set' or 'reassign'" ;;
   esac
 }
 sub_task_add() {
@@ -351,6 +353,56 @@ sub_task_set() {
   [ -n "$(ledger_get "$_ts_t" task_id)" ] || usage_die "unknown task: $_ts_t"
   with_lock set_state "$_ts_t" "$_ts_e" "" "$_ts_n"
   printf 'task %s -> %s\n' "$_ts_t" "$_ts_e"
+}
+
+# task reassign: move a pending task to another worker. Only pending tasks: a
+# dispatched task belongs to the worker that received its prompt; cancel it and
+# add a new one instead (Degraded D). Worker fields are rewritten together
+# (agent_name, title, kind, pane_id, directory, worktree) and the DAG is
+# re-validated: relative scopes resolve against the new worker's directory.
+sub_task_reassign() {
+  _tr_run=""; _tr_t=""; _tr_w=""
+  while [ $# -gt 0 ]; do
+    [ $# -ge 2 ] || usage_die "task reassign: $1 needs a value"
+    case "$1" in
+      --run) _tr_run=$2 ;; --task) _tr_t=$2 ;; --worker) _tr_w=$2 ;;
+      *) usage_die "task reassign: unknown argument: $1" ;;
+    esac
+    shift 2
+  done
+  [ -n "$_tr_t" ] && [ -n "$_tr_w" ] || usage_die "task reassign: --task and --worker are required"
+  require_run "$_tr_run"
+  _tr_name=$(resolve_worker "$_tr_w") || usage_die "unknown worker: $_tr_w (see orch.sh pool)"
+  [ -n "$(ledger_get "$_tr_t" task_id)" ] || usage_die "unknown task: $_tr_t"
+  _tr_state=$(ledger_get "$_tr_t" estado)
+  [ "$_tr_state" = pending ] || usage_die "task reassign: task $_tr_t is ${_tr_state:-unknown}, not pending (cancel it and add a new task instead)"
+  _tr_old=$(ledger_get "$_tr_t" agent_name)
+  _tr_ord=$(workers_field "$_tr_name" ord)
+  _tr_wt=$(workers_field "$_tr_name" worktree)
+  if [ "$_tr_wt" = - ]; then _tr_wtv=null; else _tr_wtv=$(yaml_q "$_tr_wt"); fi
+  _tr_prev=$(ledger_get "$_tr_t" notas)
+  lock_acquire
+  cp "$LEDGER" "$LEDGER.bak"
+  if ! ledger_update "$_tr_t" \
+    "agent_name=$(yaml_q "$_tr_name")" \
+    "title=$(yaml_q "[$(printf '%02d' "$_tr_ord")] $(workers_field "$_tr_name" title)")" \
+    "kind=$(yaml_q "$(workers_field "$_tr_name" kind)")" \
+    "pane_id=$(yaml_q "$(workers_field "$_tr_name" pane_id)")" \
+    "worktree=$_tr_wtv" \
+    "directory=$(yaml_q "$(workers_field "$_tr_name" directory)")" \
+    "last_state_at=$(yaml_q "$(now_utc)")" \
+    "notas=$(yaml_q "${_tr_prev:+$_tr_prev; }reassigned from $_tr_old")"; then
+    mv "$LEDGER.bak" "$LEDGER"; lock_release
+    die "task $_tr_t could not be updated (ledger unchanged)"
+  fi
+  if _tr_out=$(cd "$WS" && sh "$SKILL_SCRIPTS/validate_dag.sh" "$LEDGER"); then
+    rm -f "$LEDGER.bak"; lock_release
+    printf 'task %s -> %s\n' "$_tr_t" "$_tr_name"
+  else
+    mv "$LEDGER.bak" "$LEDGER"; lock_release
+    printf '%s\n' "$_tr_out" | grep '^\[FAIL\]'
+    die "task $_tr_t reassignment rejected by validate_dag.sh (ledger unchanged)"
+  fi
 }
 
 # ---- dispatch ------------------------------------------------------------------
