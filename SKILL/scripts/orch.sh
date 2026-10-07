@@ -23,6 +23,7 @@ orch.sh task reassign --task ID --worker NAME|NN [--run ID]
 orch.sh task status --task ID [--run ID]
 orch.sh dispatch --task ID --prompt-file F [--wait] [--timeout MS] [--run ID]
 orch.sh wait --task ID [--timeout MS] [--stuck-secs N] [--run ID]
+orch.sh wait --any [--timeout MS] [--run ID]
 orch.sh reconcile --task ID [--run ID]
 orch.sh verify --task ID [--run ID]
 orch.sh suggest-count FILE
@@ -553,8 +554,9 @@ read_hash() {
   _rh_hash=$(printf '%s\n' "$H_OUT" | sed '$d' | sed '$d' | sed '$d' | tr -d '0-9' | cksum)
 }
 sub_wait() {
-  _wt_run=""; _wt_t=""; _wt_to=""; _wt_stuck=1800
+  _wt_run=""; _wt_t=""; _wt_to=""; _wt_stuck=""; _wt_any=0
   while [ $# -gt 0 ]; do
+    case "$1" in --any) _wt_any=1; shift; continue ;; esac
     [ $# -ge 2 ] || usage_die "wait: $1 needs a value"
     case "$1" in
       --run) _wt_run=$2 ;; --task) _wt_t=$2 ;; --timeout) _wt_to=$2 ;; --stuck-secs) _wt_stuck=$2 ;;
@@ -563,7 +565,14 @@ sub_wait() {
     shift 2
   done
   case "$_wt_to" in *[!0-9]*|???????????*) usage_die "wait: --timeout must be a number of milliseconds (at most 10 digits)" ;; esac
-  case "$_wt_stuck" in ''|*[!0-9]*|???????????*) usage_die "wait: --stuck-secs must be a number (at most 10 digits)" ;; esac
+  case "$_wt_stuck" in *[!0-9]*|???????????*) usage_die "wait: --stuck-secs must be a number (at most 10 digits)" ;; esac
+  if [ "$_wt_any" = 1 ]; then
+    [ -z "$_wt_t" ] || usage_die "wait: --any and --task are exclusive"
+    [ -z "$_wt_stuck" ] || usage_die "wait: --stuck-secs is only for wait --task (the stuck advisory is per task)"
+    require_run "$_wt_run"
+    wait_any "$_wt_to"; exit $?
+  fi
+  [ -n "$_wt_stuck" ] || _wt_stuck=1800
   [ -n "$_wt_t" ] || usage_die "wait: --task is required"
   require_run "$_wt_run"
   _wt_state=$(ledger_get "$_wt_t" estado)
@@ -627,6 +636,56 @@ sub_wait() {
       with_lock set_state "$_wt_t" outcome-unknown "" "wait: timeout after ${_wt_to}ms"
       printf 'wait: %s timeout; outcome-unknown; run: orch.sh reconcile --task %s\n' "$_wt_t" "$_wt_t"; exit 3
     fi
+  done
+}
+
+# wait_any [TIMEOUT_MS]: poll `agent list` (one call per slice) over the running
+# tasks in ledger order and settle the first one that is no longer working:
+# idle/done -> completed (exit 0), blocked -> awaiting-approval (exit 5),
+# missing -> interrupted (exit 1). Timeout: exit 3, no estado changes. Three
+# consecutive list failures: exit 1, no estado changes. No stuck advisory here.
+wait_any() {
+  _wa_to=${1:-}; _wa_start=$(date +%s); _wa_deadline=0; _wa_fails=0
+  [ -z "$_wa_to" ] || _wa_deadline=$(( _wa_start + (_wa_to + 999) / 1000 ))
+  _wa_running=$(ledger_rows | awk -F'\t' '$3 == "running" { print $1 }')
+  if [ -z "$_wa_running" ]; then
+    _wa_appr=$(ledger_rows | awk -F'\t' '$3 == "awaiting-approval" { print $1 }' | join_lines)
+    if [ -n "$_wa_appr" ]; then
+      printf 'wait: no running task; awaiting approval: %s; ask the user\n' "$_wa_appr"; return 5
+    fi
+    usage_die "wait --any: no running task in run $RUN_ID"
+  fi
+  while :; do
+    if hcall agent list; then
+      _wa_fails=0
+      _wa_list=$(printf '%s' "$H_OUT" | jq -r '.result.agents[]? | select((.name // "") != "") | "\(.name)\t\(.agent_status // "unknown")"')
+      for _wa_t in $_wa_running; do
+        [ "$(ledger_get "$_wa_t" estado)" = running ] || continue
+        _wa_n=$(ledger_get "$_wa_t" agent_name)
+        _wa_st=$(printf '%s\n' "$_wa_list" | awk -F'\t' -v n="$_wa_n" 'BEGIN { s = "gone" } $1 == n { s = $2; exit } END { print s }')
+        case "$_wa_st" in
+          idle|done)
+            with_lock set_state "$_wa_t" completed "$_wa_st"
+            printf 'wait: %s completed (%s); next: orch.sh verify --task %s\n' "$_wa_t" "$_wa_st" "$_wa_t"; return 0 ;;
+          blocked)
+            with_lock set_state "$_wa_t" awaiting-approval blocked
+            notify "$_wa_t: $_wa_n needs approval" request
+            printf 'wait: %s awaiting approval in pane %s; ask the user\n' "$_wa_t" "$(ledger_get "$_wa_t" pane_id)"; return 5 ;;
+          gone)
+            with_lock set_state "$_wa_t" interrupted "" "wait: agent $_wa_n is gone"
+            printf 'wait: %s interrupted (agent %s is gone)\n' "$_wa_t" "$_wa_n"; return 1 ;;
+        esac
+      done
+    else
+      _wa_fails=$((_wa_fails + 1))
+      if [ "$_wa_fails" -ge 3 ]; then
+        printf 'wait: herdr error (%s); estados unchanged\n' "$H_ERR"; return 1
+      fi
+    fi
+    if [ "$_wa_deadline" -gt 0 ] && [ "$(date +%s)" -ge "$_wa_deadline" ]; then
+      printf 'wait: timeout; no task settled (estados unchanged)\n'; return 3
+    fi
+    sleep 3
   done
 }
 

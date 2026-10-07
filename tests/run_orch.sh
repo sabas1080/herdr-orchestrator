@@ -900,6 +900,51 @@ resp agent_get "$(agent_json "$N1" working)"; resp agent_wait '' 1 "$(herr timeo
 orch wait --task W1 --timeout 1 >/dev/null 2>&1
 check fb-status-outcome-unknown 3 "status: W1 outcome-unknown" orch task status --task W1
 
+# wait --any: returns the first running task that settles; one agent list per poll
+two_running() { # CASE: W1 on worker 1 and W2 on worker 2, both running
+  setup_run "$1"
+  orch task add --id W1 --worker 1 --criterion c --scope docs/a >/dev/null
+  orch task add --id W2 --worker 2 --criterion c --scope docs/b >/dev/null
+  resp agent_prompt '' 1 "$(herr timeout)"
+  orch dispatch --task W1 --prompt-file "$WS/task.md" >/dev/null
+  orch dispatch --task W2 --prompt-file "$WS/task.md" >/dev/null
+  : > "$FAKE_HERDR_DIR/calls.log"
+}
+alist() { # alist NAME STATUS [NAME STATUS]: agent_list fake with the given agents
+  _al='{"result":{"agents":['; _sep=''
+  while [ $# -ge 2 ]; do _al="$_al$_sep{\"name\":\"$1\",\"agent_status\":\"$2\",\"pane_id\":\"w1:p2\"}"; _sep=,; shift 2; done
+  resp agent_list "$_al],\"type\":\"agent_list\"}}"
+}
+two_running fb-wait-any
+alist "$N1" working "$N2" idle
+check fb-wait-any-first 0 "wait: W2 completed (idle); next: orch.sh verify --task W2" orch wait --any
+check fb-wait-any-w2 0 "completed" st W2
+check fb-wait-any-w1 0 "running" st W1
+check fb-wait-any-one-list 0 "1" calls "^agent list"
+check fb-wait-any-no-agent-wait 0 "0" calls "^agent wait"
+alist "$N1" blocked "$N2" idle
+check fb-wait-any-blocked 5 "wait: W1 awaiting approval in pane w1:p2; ask the user" orch wait --any
+check fb-wait-any-blocked-state 0 "awaiting-approval" st W1
+check fb-wait-any-only-approval 5 "no running task; awaiting approval: W1" orch wait --any
+two_running fb-wait-any-gone
+alist "$N2" working
+check fb-wait-any-gone 1 "wait: W1 interrupted (agent $N1 is gone)" orch wait --any
+check fb-wait-any-gone-state 0 "interrupted" st W1
+check fb-wait-any-gone-other 0 "running" st W2
+two_running fb-wait-any-timeout
+alist "$N1" working "$N2" working
+check fb-wait-any-timeout 3 "wait: timeout; no task settled (estados unchanged)" orch wait --any --timeout 1
+check fb-wait-any-timeout-w1 0 "running" st W1
+check fb-wait-any-timeout-w2 0 "running" st W2
+resp agent_list '' 1 "$(herr server_unavailable)"
+: > "$FAKE_HERDR_DIR/calls.log"
+check fb-wait-any-herr 1 "herdr error (server_unavailable); estados unchanged" orch wait --any
+check fb-wait-any-herr-calls 0 "" sh -c "[ \$(grep -c '^agent list' '$FAKE_HERDR_DIR/calls.log') -eq 3 ]"
+setup_run fb-wait-any-none
+check fb-wait-any-none 2 "no running task" orch wait --any
+check fb-wait-any-conflict 2 "--any" orch wait --any --task W1
+check fb-wait-any-stuck 2 "--stuck-secs" orch wait --any --stuck-secs 5
+
 # ---- orch.sh subcommand cases are appended by Tasks 4-7 --------------------
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAILS"
