@@ -15,10 +15,12 @@ orchestrator's conversation: everything you need is in this file.
    {{OUTPUT_PATH}}
 2. Write the evidence file to:
    {{EVIDENCE_PATH}}
-   containing exactly these three lines:
+   containing exactly these three keys, in this order:
    criterion: {{CRITERION_YAML}}
    result: "pass"
    observed: "<what you ran or inspected, and what you saw>"
+   When `observed` needs more than one line, write `observed: |` and put the
+   lines below it, each indented by two spaces. No other keys.
    Write result: "fail" if the criterion is not met. Never claim pass without checking.
 3. Stop and wait for further instructions. Never edit `ledger.yaml` or `workers.tsv`.
 

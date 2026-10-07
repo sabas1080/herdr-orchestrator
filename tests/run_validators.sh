@@ -156,6 +156,24 @@ check ev-wrong-criterion 1 "[FAIL]" sh "$SCRIPTS/check_evidence.sh" "$WS/.herdr-
 evidence W1 'docs/a/README.md exists' fail
 check ev-result-fail 1 "result" sh "$SCRIPTS/check_evidence.sh" "$WS/.herdr-orch/r1/W1/evidence.yml" 'docs/a/README.md exists'
 check ev-missing-file 1 "missing" sh "$SCRIPTS/check_evidence.sh" "$WS/nope.yml" 'x'
+# observed may be a literal block scalar (| or |-) with indented lines
+EV=$WS/.herdr-orch/r1/W1/evidence.yml
+printf 'criterion: "docs/a/README.md exists"\nresult: "pass"\nobserved: |\n  ran ls docs/a\n  saw README.md (1 file)\n' > "$EV"
+check ev-block-observed 0 "" sh "$SCRIPTS/check_evidence.sh" "$EV" 'docs/a/README.md exists'
+printf 'criterion: "docs/a/README.md exists"\nresult: "pass"\nobserved: |-\n  ran ls docs/a\n\n  saw README.md\n' > "$EV"
+check ev-block-strip-blank 0 "" sh "$SCRIPTS/check_evidence.sh" "$EV" 'docs/a/README.md exists'
+printf 'criterion: "docs/a/README.md exists"\nresult: "pass"\nobserved: |\n' > "$EV"
+check ev-block-empty 1 "observed is empty" sh "$SCRIPTS/check_evidence.sh" "$EV" 'docs/a/README.md exists'
+printf 'criterion: "docs/a/README.md exists"\nresult: "pass"\nobserved: |\n   \n' > "$EV"
+check ev-block-blank-only 1 "observed is empty" sh "$SCRIPTS/check_evidence.sh" "$EV" 'docs/a/README.md exists'
+printf 'criterion: "docs/a/README.md exists"\nobserved: |\n  ran ls\nresult: "pass"\n' > "$EV"
+check ev-block-then-key 0 "" sh "$SCRIPTS/check_evidence.sh" "$EV" 'docs/a/README.md exists'
+printf 'criterion: |\n  docs/a/README.md exists\nresult: "pass"\nobserved: "x"\n' > "$EV"
+check ev-block-criterion-rejected 1 "double-quoted" sh "$SCRIPTS/check_evidence.sh" "$EV" 'docs/a/README.md exists'
+printf 'criterion: "docs/a/README.md exists"\nresult: "pass"\nobserved: | trailing\n  x\n' > "$EV"
+check ev-block-trailing 1 "double-quoted" sh "$SCRIPTS/check_evidence.sh" "$EV" 'docs/a/README.md exists'
+printf 'criterion: "docs/a/README.md exists"\nresult: "pass"\nobserved: "one line"\n  stray indented\n' > "$EV"
+check ev-indent-outside-block 1 "outside the evidence format" sh "$SCRIPTS/check_evidence.sh" "$EV" 'docs/a/README.md exists'
 check ev-usage 2 "" sh "$SCRIPTS/check_evidence.sh"
 
 # ---- validate_ledger_closed.sh ----------------------------------------------

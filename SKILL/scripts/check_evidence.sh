@@ -4,6 +4,8 @@
 #   result: "pass"
 #   observed: "<non-empty>"
 # Only these three keys are allowed, each once, as double-quoted scalars.
+# observed may instead be a literal block scalar (`observed: |` or `|-`)
+# followed by indented lines; blank lines inside the block are ignored.
 # Usage: check_evidence.sh EVIDENCE_FILE CRITERION
 # Exit: 0 pass, 1 fail (one "[FAIL] reason" line on stdout), 2 usage/environment.
 set -u
@@ -20,14 +22,22 @@ CRITERION=$2 awk "$_VAL_LIB
 function bad(msg) { if (!reason) reason = msg }
 {
   if (FNR == 1 && substr($0, 1, 3) == "\357\273\277") $0 = substr($0, 4)
-  line = $0; sub(/\r$/, "", line); line = strip_comment(line)
+  line = $0; sub(/\r$/, "", line)
   if (index(line, "\t")) { bad("tabs not allowed"); next }
+  if (inblock) {
+    # indented or blank lines belong to the block; anything else ends it
+    if (trim(line) == "") next
+    if (line ~ /^ /) { value["observed"] = value["observed"] (value["observed"] == "" ? "" : " ") trim(line); next }
+    inblock = 0
+  }
+  line = strip_comment(line)
   if (trim(line) == "") next
   if (line !~ /^[A-Za-z_][A-Za-z0-9_]*:/) { bad("line outside the evidence format: " line); next }
   key = line; sub(/:.*/, "", key)
   raw = line; sub(/^[A-Za-z_][A-Za-z0-9_]*:[ \t]*/, "", raw)
   if (key != "criterion" && key != "result" && key != "observed") { bad("unknown evidence key: " key); next }
   if (seen[key]++) { bad("duplicate evidence key: " key); next }
+  if (key == "observed" && (trim(raw) == "|" || trim(raw) == "|-")) { inblock = 1; value[key] = ""; next }
   if (!parse_scalar(raw, 0)) { bad("evidence " key " must be a double-quoted string"); next }
   value[key] = PVAL
 }
