@@ -788,6 +788,26 @@ R=$WS/.herdr-orch/t; mkdir -p "$R/workers.tsv"
 check ff-workers-init-fail 1 "could not initialise $WS/.herdr-orch/t/workers.tsv" orch init-run --run-id t --worker claude
 check ff-workers-init-no-pane 0 "" sh -c "! grep -q '^pane split' '$FAKE_HERDR_DIR/calls.log'"
 
+# ---- Feedback round 1 -------------------------------------------------------
+# pool: a worker's active task wins over a later pending one; completed over pending
+setup_run fb-pool-active
+orch task add --id W1 --worker 1 --criterion c --scope docs/a >/dev/null
+resp agent_prompt '' 1 "$(herr timeout)"
+orch dispatch --task W1 --prompt-file "$WS/task.md" >/dev/null
+orch task add --id W2 --worker 1 --criterion c --scope docs/b >/dev/null
+check fb-pool-active-first 0 "W1	running" orch pool
+check fb-pool-queue-hidden 0 "" sh -c "! (cd '$WS' && PATH='$FAKE_BIN:$PATH' HERDR_ENV=1 sh '$ORCH' pool | grep -q 'W2')"
+setup_run fb-pool-completed
+orch task add --id W1 --worker 1 --criterion c --scope docs/a >/dev/null
+resp agent_prompt "$(agent_json "$N1" done)"
+orch dispatch --task W1 --prompt-file "$WS/task.md" >/dev/null
+orch task add --id W2 --worker 1 --criterion c --scope docs/b >/dev/null
+check fb-pool-completed-first 0 "W1	completed" orch pool
+setup_run fb-pool-pending
+orch task add --id W1 --worker 1 --criterion c --scope docs/a >/dev/null
+orch task add --id W2 --worker 1 --criterion c --scope docs/b >/dev/null
+check fb-pool-first-pending 0 "W1	pending" orch pool
+
 # ---- orch.sh subcommand cases are appended by Tasks 4-7 --------------------
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAILS"

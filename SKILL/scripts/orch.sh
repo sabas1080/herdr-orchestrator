@@ -256,8 +256,15 @@ sub_pool() {
   workers_rows | while IFS='	' read -r _o _n _t _k _w _p _d _x; do
     _st=$(printf '%s' "$_po_agents" | jq -r --arg n "$_n" \
       '[.result.agents[] | select((.name // "") == $n) | .agent_status][0] // "gone"')
+    # the worker's open task: active states first, then completed, then the first pending
     _tk=$(printf '%s\n' "$_po_rows" | awk -F'\t' -v n="$_n" '
-      $2 == n && $3 !~ /^(verified|cancelled|failed|partial|blocked|interrupted)$/ { t = $1 "\t" $3 }
+      function rank(s) {
+        if (s ~ /^(launching|running|awaiting-approval|outcome-unknown)$/) return 3
+        if (s == "completed") return 2
+        if (s == "pending") return 1
+        return 0
+      }
+      $2 == n && rank($3) > best { best = rank($3); t = $1 "\t" $3 }
       END { if (t == "") t = "-\t-"; print t }')
     printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$_o" "$_n" "$_k" "$_st" "$_p" "$_tk"
   done
