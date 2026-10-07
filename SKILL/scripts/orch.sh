@@ -17,11 +17,11 @@ usage_text() {
 orch.sh preflight
 orch.sh init-run [--run-id ID] --worker KIND[:Title]... [--worktree] [--agent-arg ARG]...
 orch.sh pool [--run ID]
-orch.sh task add --id ID --worker NAME|NN --criterion TEXT --scope A[,B] [--deps X[,Y]] [--run ID]
+orch.sh task add --id ID --worker NAME|NN --criterion TEXT --scope A[,B] [--deps X[,Y]] [--prompt-file F] [--run ID]
 orch.sh task set --task ID --estado cancelled|failed|partial|blocked|interrupted --notas TEXT [--run ID]
 orch.sh task reassign --task ID --worker NAME|NN [--run ID]
 orch.sh task status --task ID [--run ID]
-orch.sh dispatch --task ID --prompt-file F [--wait] [--timeout MS] [--run ID]
+orch.sh dispatch --task ID [--prompt-file F] [--wait] [--timeout MS] [--run ID]
 orch.sh wait --task ID [--timeout MS] [--stuck-secs N] [--run ID]
 orch.sh wait --any [--timeout MS] [--run ID]
 orch.sh reconcile --task ID [--run ID]
@@ -286,12 +286,13 @@ sub_task() {
   esac
 }
 sub_task_add() {
-  _ta_run=""; _ta_id=""; _ta_w=""; _ta_crit=""; _ta_scope=""; _ta_deps=""
+  _ta_run=""; _ta_id=""; _ta_w=""; _ta_crit=""; _ta_scope=""; _ta_deps=""; _ta_pf=""
   while [ $# -gt 0 ]; do
     [ $# -ge 2 ] || usage_die "task add: $1 needs a value"
     case "$1" in
       --run) _ta_run=$2 ;; --id) _ta_id=$2 ;; --worker) _ta_w=$2 ;;
       --criterion) _ta_crit=$2 ;; --scope) _ta_scope=$2 ;; --deps) _ta_deps=$2 ;;
+      --prompt-file) _ta_pf=$2 ;;
       *) usage_die "task add: unknown argument: $1" ;;
     esac
     shift 2
@@ -299,6 +300,9 @@ sub_task_add() {
   [ -n "$_ta_id" ] && [ -n "$_ta_w" ] && [ -n "$_ta_crit" ] && [ -n "$_ta_scope" ] ||
     usage_die "task add: --id, --worker, --criterion and --scope are required"
   case "$_ta_id" in [!A-Za-z0-9]*|*[!A-Za-z0-9._-]*) usage_die "invalid task id: $_ta_id" ;; esac
+  if [ -n "$_ta_pf" ] && { [ ! -f "$_ta_pf" ] || [ ! -r "$_ta_pf" ]; }; then
+    usage_die "task add: cannot read --prompt-file $_ta_pf"
+  fi
   require_run "$_ta_run"
   _ta_name=$(resolve_worker "$_ta_w") || usage_die "unknown worker: $_ta_w (see orch.sh pool)"
   [ -z "$(ledger_get "$_ta_id" task_id)" ] || usage_die "task $_ta_id already exists"
@@ -307,6 +311,13 @@ sub_task_add() {
   if [ "$_ta_wt" = - ]; then _ta_wtv=null; else _ta_wtv=$(yaml_q "$_ta_wt"); fi
   _ta_dir=$RUN_DIR/$_ta_id
   mkdir -p "$_ta_dir"
+  if [ -n "$_ta_pf" ]; then
+    # copy via a temp so --prompt-file may already be the stored path
+    if ! { cp "$_ta_pf" "$_ta_dir/.task.tmp.$$" && mv "$_ta_dir/.task.tmp.$$" "$_ta_dir/task.md"; }; then
+      rm -f "$_ta_dir/.task.tmp.$$"; rmdir "$_ta_dir" 2>/dev/null
+      die "task add: could not store $_ta_pf as $_ta_dir/task.md"
+    fi
+  fi
   _ta_now=$(now_utc)
   lock_acquire
   cp "$LEDGER" "$LEDGER.bak"
@@ -326,6 +337,7 @@ sub_task_add() {
     'estado="pending"' 'runtime_status=null' 'execution_outcome="unknown"' \
     "created_at=$(yaml_q "$_ta_now")" "last_state_at=$(yaml_q "$_ta_now")" 'notas=""'; then
     mv "$LEDGER.bak" "$LEDGER"; lock_release
+    [ -z "$_ta_pf" ] || rm -f "$_ta_dir/task.md"
     rmdir "$_ta_dir" 2>/dev/null
     die "task $_ta_id could not be appended (ledger unchanged)"
   fi
@@ -334,6 +346,7 @@ sub_task_add() {
     printf 'task %s added -> %s\n' "$_ta_id" "$_ta_name"
   else
     mv "$LEDGER.bak" "$LEDGER"; lock_release
+    [ -z "$_ta_pf" ] || rm -f "$_ta_dir/task.md"
     rmdir "$_ta_dir" 2>/dev/null
     printf '%s\n' "$_ta_out" | grep '^\[FAIL\]'
     die "task $_ta_id rejected by validate_dag.sh (ledger unchanged)"
@@ -475,8 +488,13 @@ sub_dispatch() {
   done
   [ -z "$_dp_to" ] || [ "$_dp_wait" -eq 1 ] || usage_die "dispatch: --timeout requires --wait"
   case "$_dp_to" in *[!0-9]*|???????????*) usage_die "dispatch: --timeout must be a number of milliseconds (at most 10 digits)" ;; esac
-  [ -n "$_dp_t" ] && [ -f "$_dp_pf" ] || usage_die "dispatch: --task and an existing --prompt-file are required"
+  [ -n "$_dp_t" ] || usage_die "dispatch: --task is required"
+  [ -z "$_dp_pf" ] || [ -f "$_dp_pf" ] || usage_die "dispatch: --prompt-file $_dp_pf does not exist"
   require_run "$_dp_run"
+  if [ -z "$_dp_pf" ]; then
+    _dp_pf=$RUN_DIR/$_dp_t/task.md
+    [ -f "$_dp_pf" ] || usage_die "dispatch: no --prompt-file and no stored task file for $_dp_t ($_dp_pf; store one with task add --prompt-file)"
+  fi
   _dp_state=$(ledger_get "$_dp_t" estado)
   [ "$_dp_state" != launching ] || usage_die "task $_dp_t is launching (a previous dispatch did not finish); run: orch.sh reconcile --task $_dp_t"
   [ "$_dp_state" = pending ] || usage_die "dispatch: task $_dp_t is ${_dp_state:-unknown}, not pending"

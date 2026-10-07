@@ -945,6 +945,32 @@ check fb-wait-any-none 2 "no running task" orch wait --any
 check fb-wait-any-conflict 2 "--any" orch wait --any --task W1
 check fb-wait-any-stuck 2 "--stuck-secs" orch wait --any --stuck-secs 5
 
+# task add --prompt-file stores the task body with the task; dispatch uses it by default
+setup_run fb-promptfile
+check fb-add-pf 0 "task W1 added" orch task add --id W1 --worker 1 --criterion c --scope docs/a --prompt-file "$WS/task.md"
+check fb-add-pf-stored 0 "describing module a" cat "$WS/.herdr-orch/t/W1/task.md"
+resp agent_prompt "$(agent_json "$N1" done)"
+check fb-dispatch-default 0 "completed" orch dispatch --task W1
+check fb-dispatch-default-body 0 "describing module a" cat "$WS/.herdr-orch/t/W1/prompt.md"
+check fb-dispatch-default-header 0 "herdr-orchestrator task W1" cat "$WS/.herdr-orch/t/W1/prompt.md"
+orch task add --id W2 --worker 2 --criterion c --scope docs/b >/dev/null
+check fb-dispatch-no-file 2 "no --prompt-file and no stored task file" orch dispatch --task W2
+check fb-dispatch-no-file-pending 0 "pending" st W2
+check fb-add-pf-missing 2 "cannot read --prompt-file" orch task add --id W3 --worker 2 --criterion c --scope docs/c --prompt-file "$WS/nope.md"
+check fb-add-pf-missing-nodir 0 "" test ! -d "$WS/.herdr-orch/t/W3"
+check fb-add-pf-overlap 1 "rejected" orch task add --id W4 --worker 2 --criterion c --scope docs/a/x --prompt-file "$WS/task.md"
+check fb-add-pf-overlap-nodir 0 "" test ! -d "$WS/.herdr-orch/t/W4"
+# the stored file survives reassign and a reconcile back to pending
+orch task add --id W5 --worker 2 --criterion c --scope docs/e --prompt-file "$WS/task.md" >/dev/null
+orch task reassign --task W5 --worker 1 >/dev/null
+resp agent_prompt '' 1 "$(herr agent_blocked)"
+orch dispatch --task W5 >/dev/null 2>&1
+resp agent_get "$(agent_json "$N1" idle)"; resp agent_read 'unrelated scrollback'
+orch reconcile --task W5 >/dev/null
+check fb-pf-redispatch-pending 0 "pending" st W5
+resp agent_prompt "$(agent_json "$N1" done)"
+check fb-pf-redispatch 0 "completed" orch dispatch --task W5
+
 # ---- orch.sh subcommand cases are appended by Tasks 4-7 --------------------
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAILS"
