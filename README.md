@@ -122,18 +122,22 @@ All mechanics live in `SKILL/scripts/orch.sh` (POSIX sh, needs `herdr` + `jq`). 
 orch.sh preflight
 orch.sh init-run [--run-id ID] --worker KIND[:Title]... [--worktree] [--agent-arg ARG]...
 orch.sh pool [--run ID]
-orch.sh task add --id ID --worker NAME|NN --criterion TEXT --scope A[,B] [--deps X[,Y]] [--run ID]
+orch.sh task add --id ID --worker NAME|NN --criterion TEXT --scope A[,B] [--deps X[,Y]] [--prompt-file F] [--run ID]
 orch.sh task set --task ID --estado cancelled|failed|partial|blocked|interrupted --notas TEXT [--run ID]
-orch.sh dispatch --task ID --prompt-file F [--wait] [--timeout MS] [--run ID]
+orch.sh task reassign --task ID --worker NAME|NN [--run ID]
+orch.sh task status --task ID [--run ID]
+orch.sh dispatch --task ID [--prompt-file F] [--wait] [--timeout MS] [--run ID]
 orch.sh wait --task ID [--timeout MS] [--stuck-secs N] [--run ID]
+orch.sh wait --any [--timeout MS] [--run ID]
 orch.sh reconcile --task ID [--run ID]
 orch.sh verify --task ID [--run ID]
 orch.sh suggest-count FILE
+orch.sh summary [--run ID]
 orch.sh close [--allow-degraded] [--run ID]
 orch.sh teardown [--confirm] [--remove-worktrees] [--run ID]
 ```
 
-Exit codes: `0` ok · `1` failure · `2` usage/environment · `3` outcome unknown/timeout · `4` stuck (advisory) · `5` waiting for your approval.
+Exit codes: `0` ok · `1` failure · `2` usage/environment · `3` outcome unknown/timeout · `4` stuck (advisory) · `5` waiting for your approval · `6` not settled yet (`task status`).
 The skill's own instructions are in [SKILL/SKILL.md](SKILL/SKILL.md); details in [SKILL/references/](SKILL/references/).
 
 ### Tests

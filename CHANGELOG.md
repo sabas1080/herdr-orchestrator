@@ -4,6 +4,22 @@ All notable changes to this project are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/) and this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+Driven by feedback from a real 5-worker, 9-task run.
+
+### Added
+- `task reassign --task ID --worker N`: moves a `pending` task to another worker (worker fields rewritten, DAG re-validated, `notas` records the previous agent). No cancelled row, so the run no longer closes as degraded when nothing failed.
+- `wait --any [--timeout MS]`: settles the first running task that is no longer working (one `agent list` per poll); same output and exit codes as `wait --task`.
+- `task status --task ID`: non-blocking ledger state with `wait`'s exit codes plus `6` while not settled.
+- `task add --prompt-file F` stores the task body as `<run>/<task>/task.md`; `dispatch --task ID` uses it when `--prompt-file` is omitted.
+- `summary`: run identity, one tab-separated row per task (worker, kind, estado, first report line, evidence path) and counts, for the output contract.
+- Evidence `observed` accepts a literal block scalar (`observed: |`), so long observations no longer have to fit one line.
+
+### Changed
+- `pool` shows a worker's active task before a queued pending one (it used to show the last ledger row).
+- Docs: H2 clarified (splitting and aggregating are the orchestrator's own work; implementing a worker's task is not); `teardown` keeps `workers.tsv` rows, so `pool` lists them as `gone`; the unattended-Claude `--agent-arg` recipe is spelled out (no per-kind shorthand: `orch.sh` is kind-agnostic).
+
 ## [0.1.0] - 2026-10-06
 
 Fork of OpenCode-Orchestrator-Skill 1.0.0 (preserved at tag `opencode-final`), rebuilt for herdr.

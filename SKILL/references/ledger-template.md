@@ -51,7 +51,7 @@ tasks:
 - `runtime_status`: `null` or the herdr `agent_status` last observed (`idle`, `working`, `blocked`, `done`, `unknown`).
 - `execution_outcome`: `unknown`, `succeeded`, `failed`, `interrupted` or `cancelled`.
 - Timestamps are UTC `YYYY-MM-DDTHH:MM:SSZ`; `created_at` never changes; `last_state_at` is updated on each transition.
-- `notas`: free text; each new note is appended to the previous ones separated by `; `.
+- `notas`: free text; each new note is appended to the previous ones separated by `; ` (`dispatch` writes the delivery note, `task reassign` writes `reassigned from <agent>`).
 
 ## Path model
 
@@ -86,7 +86,8 @@ Active states: `launching`, `running`, `awaiting-approval`, `outcome-unknown`. T
 | `outcome-unknown` | `outcome-unknown` / `running` / `completed` / `awaiting-approval` / `interrupted` / `pending` | `reconcile` | `pending` only under the delivery rule |
 | `completed` | `verified` | `verify` | evidence gate |
 | any non-terminal | `cancelled` / `failed` / `partial` / `blocked` / `interrupted` | `task set` | `--notas` required |
-| terminal | none | none | no transitions; reassignment creates a new task |
+| terminal | none | none | no transitions; reassigning a dispatched task means a new task |
+| `pending` | `pending` | `task reassign` | worker fields rewritten (`agent_name`, `title`, `kind`, `pane_id`, `directory`, `worktree`), DAG re-validated |
 
 `execution_outcome` becomes `succeeded` when the task reaches `completed`, `interrupted`/`cancelled`/`failed` with the matching terminal state, and `unknown` for `pending`, `launching`, `running`, `awaiting-approval`, `outcome-unknown`. `verify` changes only `estado` and `last_state_at`. `partial` and `blocked` (via `task set`) leave `execution_outcome` unchanged. `completed` requires `execution_outcome: succeeded`.
 
@@ -118,7 +119,7 @@ Active states: `launching`, `running`, `awaiting-approval`, `outcome-unknown`. T
 
 ## Verified-task gate
 
-A task becomes `verified` only if `output_path` exists and every `evidence_refs` file exists and holds exactly the three keys `criterion` (equal to the task's criterion), `result: "pass"` and a non-empty `observed` (`scripts/check_evidence.sh`).
+A task becomes `verified` only if `output_path` exists and every `evidence_refs` file exists and holds exactly the three keys `criterion` (equal to the task's criterion), `result: "pass"` and a non-empty `observed` (`scripts/check_evidence.sh`). `criterion` and `result` are double-quoted scalars; `observed` is either a double-quoted scalar or a literal block (`observed: |` or `|-`, then lines indented by two spaces; blank lines inside are ignored).
 
 ## Closure (`validate_ledger_closed.sh`)
 

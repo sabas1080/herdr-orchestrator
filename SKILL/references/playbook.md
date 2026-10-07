@@ -1,6 +1,6 @@
 # Playbook: an 8-step herdr run
 
-Run every command from the orchestrator's workspace root. `orch.sh` below is `sh SKILL/scripts/orch.sh` (`SKILL` = the skill directory). Exit codes: `0` ok, `1` failure, `2` usage/environment, `3` outcome unknown or timeout, `4` stuck (advisory), `5` awaiting approval.
+Run every command from the orchestrator's workspace root. `orch.sh` below is `sh SKILL/scripts/orch.sh` (`SKILL` = the skill directory). Exit codes: `0` ok, `1` failure, `2` usage/environment, `3` outcome unknown or timeout, `4` stuck (advisory), `5` awaiting approval, `6` not settled yet (`task status` only).
 
 ## Step 1 Split
 
@@ -28,7 +28,12 @@ Prints `key=value` lines (versions, `compatible`, `kinds`, `template=ok|missing`
 orch.sh init-run --run-id 20261006-docs --worker claude --worker codex:"Doc Writer"
 ```
 
-One `--worker KIND[:Title]` per worker (titles may contain spaces; quote them). Optional: `--worktree` only if the user asked; `--agent-arg ARG` (repeatable) passes native arguments to every worker after `--`, e.g. `--agent-arg --permission-mode --agent-arg auto`, only when the user wants unattended Claude workers. See [agents-and-safety.md](agents-and-safety.md).
+One `--worker KIND[:Title]` per worker (titles may contain spaces; quote them). Optional: `--worktree` only if the user asked; `--agent-arg ARG` (repeatable) passes native arguments to every worker after `--`, one flag or value per `--agent-arg`, only when the user wants unattended Claude workers. See [agents-and-safety.md](agents-and-safety.md). `orch.sh` is kind-agnostic, so there is no shorthand for any one agent's flags; the usual unattended-Claude recipe is:
+
+```sh
+orch.sh init-run --run-id R --worker claude --worker claude \
+  --agent-arg --model --agent-arg sonnet --agent-arg --permission-mode --agent-arg auto
+```
 
 Output per worker: `started  [01] Vermithrax -> w01-vermithrax-xxxx (claude, w1:p2)` (or `reused …`), then `run <id> ready: <dir>`. Exit `0` ready; `1` with `INCOMPLETE: N worker(s) failed` and one `FAILED` line per failure (typically a dialog waiting in a pane: ask the user to answer it, then rerun `init-run --run-id ID` with the same `--worker` and `--agent-arg` flags); `2` usage, unknown kind or a worker count/title mismatch on rerun. A name collision with a live agent outside the run fails (exit 1) before anything is created.
 
@@ -37,23 +42,31 @@ New folders and new worktrees trigger Claude's folder-trust dialog. The user ans
 ## Step 4 Task add
 
 ```sh
-orch.sh task add --id W1 --worker 1 --scope docs/a --criterion "docs/a/README.md documents every public function of a/"
+orch.sh task add --id W1 --worker 1 --scope docs/a --criterion "docs/a/README.md documents every public function of a/" --prompt-file /tmp/w1.md
 orch.sh task add --id W3 --worker 1 --scope docs/a/api --deps W1 --criterion "…"
 ```
 
-`--worker` is an ordinal (`1`, `01`) or an agent name from `orch.sh pool`. `--scope` and `--deps` take comma-separated lists. The ledger is validated on every add. Exit `0`: `task W1 added -> <agent>`. Exit `1`: the validator rejected the task (`[FAIL]` lines; the ledger is left unchanged): add `--deps` or split the scopes. Exit `2`: bad usage, unknown worker or duplicate id.
+`--worker` is an ordinal (`1`, `01`) or an agent name from `orch.sh pool`. `--scope` and `--deps` take comma-separated lists. `--prompt-file F` copies the task body to `.herdr-orch/<run>/<task>/task.md`, so `dispatch` needs no file later (also after `reconcile` returns the task to `pending`, or after a reassignment). The ledger is validated on every add. Exit `0`: `task W1 added -> <agent>`. Exit `1`: the validator rejected the task (`[FAIL]` lines; the ledger is left unchanged, no task directory is left behind): add `--deps` or split the scopes. Exit `2`: bad usage, unknown worker, unreadable `--prompt-file` or duplicate id.
 
-`orch.sh pool` shows workers, herdr status and each worker's open task (`ORD NAME KIND STATUS PANE TASK ESTADO`); `STATUS=gone` means the agent no longer exists.
+```sh
+orch.sh task reassign --task W3 --worker 2      # task W3 -> w02-…
+orch.sh task status --task W1                   # status: W1 running (w01-…); exit 6
+```
+
+`task reassign` moves a `pending` task to another worker: `agent_name`, `title`, `kind`, `pane_id`, `directory` and `worktree` are rewritten together, `notas` gets `reassigned from <agent>`, and the DAG is re-validated (relative scopes resolve against the new worker's directory; a rejection leaves the ledger unchanged, exit `1`). A task that was already dispatched cannot be reassigned (exit `2`): cancel it and add a new one (Degraded D). `task status` prints the ledger `estado` without calling herdr; exit codes as `wait` (`0` completed/verified, `1` terminal non-verified, `3` outcome-unknown, `5` awaiting-approval) plus `6` while `pending`, `launching` or `running`.
+
+`orch.sh pool` shows workers, herdr status and each worker's open task (`ORD NAME KIND STATUS PANE TASK ESTADO`): the active task first, else a `completed` one waiting for `verify`, else the first `pending` in the queue. `STATUS=gone` means the agent no longer exists; after `teardown` every worker shows `gone`, because rows are kept in `workers.tsv` for audit.
 
 ## Step 5 Dispatch
 
 Write the task file (see [prompt-templates.md](prompt-templates.md)), then:
 
 ```sh
-orch.sh dispatch --task W1 --prompt-file /tmp/w1.md            # or add --wait [--timeout MS]
+orch.sh dispatch --task W1                                     # body stored by task add --prompt-file
+orch.sh dispatch --task W1 --prompt-file /tmp/w1.md            # explicit body; or add --wait [--timeout MS]
 ```
 
-Preconditions: task `pending`, dependencies `verified`, worker `idle` or `done`, no other active task on that worker. Outcomes:
+Without `--prompt-file`, `dispatch` uses `.herdr-orch/<run>/<task>/task.md`; exit `2` when neither exists. Preconditions: task `pending`, dependencies `verified`, worker `idle` or `done`, no other active task on that worker. Outcomes:
 
 | Result | Output | Exit |
 | --- | --- | --- |
@@ -71,9 +84,10 @@ Dispatch records `prompt sent`, `prompt not sent` or `send uncertain: <code>` in
 
 ```sh
 orch.sh wait --task W1 [--timeout MS] [--stuck-secs N]
+orch.sh wait --any [--timeout MS]
 ```
 
-Needs the task `running` or `awaiting-approval`. Slices of 60 s, no raw output.
+`--task` needs the task `running` or `awaiting-approval`. Slices of 60 s, no raw output. `--any` polls one `agent list` every 3 s over every `running` task and settles the first one (in ledger order) whose worker is no longer `working`, printing the same lines and exit codes as below for that task; a timeout exits `3` without changing any `estado`, and with no running task it exits `5` listing the tasks awaiting approval, or `2` when there is nothing to wait for. The stuck advisory (exit `4`) exists only with `--task`. Several tasks can therefore be multiplexed from one shell: `wait --any`, `verify` the task it names, repeat.
 
 | Exit | Meaning | Next |
 | --- | --- | --- |
@@ -99,9 +113,13 @@ Needs `completed`. Reads only the report and evidence paths; you read `report.md
 orch.sh close [--allow-degraded]
 ```
 
-Runs the closure validator with `--require-evidence` and prints `[FAIL]` lines plus the final `TOTAL: N passed, M failed`; sends a notification (`done` or `request`). Exit `0` pass, `1` validation failure, `2` environment. Use `--allow-degraded` only when some task legitimately ended `failed`, `partial`, `blocked`, `cancelled` or `interrupted` with a reason in `notas`; the run is then reported as degraded.
+Runs the closure validator with `--require-evidence` and prints `[FAIL]` lines plus the final `TOTAL: N passed, M failed` (the `[OK]` lines go to stderr only when the close fails); sends a notification (`done` or `request`). Exit `0` pass, `1` validation failure, `2` environment. Use `--allow-degraded` only when some task legitimately ended `failed`, `partial`, `blocked`, `cancelled` or `interrupted` with a reason in `notas`; the run is then reported as degraded.
 
-Then deliver the output contract ([prompt-templates.md](prompt-templates.md) section 3). Teardown only on request:
+```sh
+orch.sh summary
+```
+
+Prints `run=`, `workspace=`, `server_version=`, then one tab-separated row per task (`TASK WORKER KIND ESTADO SUMMARY EVIDENCE`; `SUMMARY` is the first non-heading line of `report.md`, `-` when absent) and `tasks=N verified=A degraded=B open=C`. Nothing is read from the panes. Then deliver the output contract ([prompt-templates.md](prompt-templates.md) section 3). Teardown only on request:
 
 ```sh
 orch.sh teardown                       # dry run: lists what would be closed
@@ -109,12 +127,13 @@ orch.sh teardown --confirm             # closes this run's worker panes
 orch.sh teardown --confirm --remove-worktrees   # worktree runs: removes each worktree instead of closing its pane
 ```
 
-Teardown warns about tasks still active, follows panes that moved (and updates the registry), skips the orchestrator's own pane, treats an already closed pane as done, never passes `--force`, and exits `1` if any pane or worktree could not be closed or removed (a dirty worktree is kept and reported; its pane stays open).
+Teardown warns about tasks still active, follows panes that moved (and updates the registry), skips the orchestrator's own pane, treats an already closed pane as done, never passes `--force`, and exits `1` if any pane or worktree could not be closed or removed (a dirty worktree is kept and reported; its pane stays open). It never deletes `workers.tsv` rows: `pool` keeps listing the workers as `gone`, which is the audit trail of the run.
 
 ## Closing checklist
 
 - Every task is terminal: `verified`, or a degraded terminal state with a reason in `notas`. None is `pending`, `completed`, `running`, `awaiting-approval` or `outcome-unknown`.
 - `close` printed a `TOTAL` line with `0 failed`, or the run is reported degraded with the `notas` of each non-verified task.
+- `summary` rows copied into the output contract, with the summary column checked against each `report.md`.
 - With `--worktree`: list every branch `orch/<run>/NN-slug` for the user; the orchestrator never merges.
 - `teardown --confirm` only if the user asked for the panes to be closed.
 

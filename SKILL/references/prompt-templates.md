@@ -4,7 +4,7 @@ Workers never see the orchestrator's conversation, so every prompt must stand on
 
 ## 1. Task file
 
-The file you pass with `orch.sh dispatch --prompt-file` holds only the task body. Use these headings:
+The file you pass with `--prompt-file` (to `task add`, which stores it with the task, or to `dispatch`) holds only the task body. Use these headings:
 
 ```markdown
 ## Objective
@@ -40,10 +40,12 @@ orchestrator's conversation: everything you need is in this file.
    {{OUTPUT_PATH}}
 2. Write the evidence file to:
    {{EVIDENCE_PATH}}
-   containing exactly these three lines:
+   containing exactly these three keys, in this order:
    criterion: {{CRITERION_YAML}}
    result: "pass"
    observed: "<what you ran or inspected, and what you saw>"
+   When `observed` needs more than one line, write `observed: |` and put the
+   lines below it, each indented by two spaces. No other keys.
    Write result: "fail" if the criterion is not met. Never claim pass without checking.
 3. Stop and wait for further instructions. Never edit `ledger.yaml` or `workers.tsv`.
 
@@ -68,7 +70,7 @@ Take `<agent_name>` and the paths from `orch.sh pool` and the ledger. Add `--wai
 
 ## 3. Final report to the user
 
-Reply in the user's language, in this order:
+`orch.sh summary` prints the run line and one tab-separated row per task straight from the ledger (its summary column is the first line of each `report.md`; check it against the report). Reply in the user's language, in this order:
 
 ```markdown
 **Global state:** <verified | partial | blocked | failed> — <normal | degraded (why)>

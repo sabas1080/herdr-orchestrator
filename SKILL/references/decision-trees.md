@@ -32,8 +32,8 @@ Do two tasks' write scopes overlap (same files or one inside the other)?
 ## Tree 3 Waiting
 
 ```text
-orch.sh wait --task ID
- |
+orch.sh wait --task ID            (or wait --any: same exits for the first running task that settles;
+ |                                 task status --task ID: same exits without blocking, 6 = not settled)
  +-- exit 0 --> verify
  +-- exit 1 --> agent gone: task interrupted --> ask the user before recreating
  |              herdr error x3: estado unchanged --> preflight, retry wait
@@ -41,6 +41,7 @@ orch.sh wait --task ID
  |                                      running / awaiting-approval / completed? continue
  +-- exit 4 --> stuck (advisory): keep waiting, or ask the user to interrupt that worker in its pane, then
  |              task set --estado cancelled --notas "<effects>" + task add (new ID, other worker)
+ |              (a task still pending needs no cancellation: task reassign --task ID --worker N)
  +-- exit 5 --> tell the user which pane needs approval --> wait again (never approve)
 ```
 
